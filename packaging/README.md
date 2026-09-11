@@ -63,6 +63,8 @@ ln -sf "$(pwd)/packaging/dsh-tui" ~/.local/bin/dsh-tui
 
 双击 `/Applications/DeepSeek Harness.app` 即可。首次启动会在 `$DSH_HOME`（默认 `~/.dsh`）下生成 `profiles/desktop`，并与 CLI 共用同一份 `settings.yaml` 与 `.env`。
 
+**完成通知**：任务跑完且窗口不在前台时弹 macOS 原生通知（标题为会话标题，正文形如「第 3 回合已完成」）。由 `packaging/desktop-notification/` 插件提供，`build-app.sh` 打包后自动装入 profile —— 首次加载会弹一条「通知已启用」确认，macOS 正是靠这次成功发送把应用登记进「系统设置 → 通知」（见坑 12）。
+
 ⚠️ **不要从已注入 `DSH_HOME` 的终端里直接运行它的可执行文件**（见坑 6）。从 Finder/Dock 启动不受影响。
 
 ### 重新打包（一条命令）
@@ -153,13 +155,21 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `patches/@earendil-works__pi-ai@0.85.1.patch` | **新增**：openai-responses 路由透传服务端原生工具，并剔除同名 function 工具 |
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的占位词（`null`/`none`/`nil`/`undefined`）。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
+| `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 13）：`classifyPiAiError` 把配额判定提到 401/403 之前，并把 403 从 `AUTH` 拆成独立的 `FORBIDDEN`——公司网关把配额耗尽也渲染成 403，先判状态码会把配额问题误报成 key 失效 |
+| `packages/sandbox/sandbox/src/escalation.ts`、`packages/sandbox/sandbox/tests/escalation.spec.ts`、`packages/shell/tool-bash/tests/tools.spec.ts`、`packages/shell/tool-pwsh/tests/tools.spec.ts` | **新增**（坑 14）：`approveEscalation` 在请求模式**等于**当前模式时直接放行，不再抛 `not strictly wider`。同族两个测试文件把「相等即报错」的用例换成真正的更窄场景 |
 | `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
 | `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
 | `apps/desktop/electron-builder.config.mjs` | **3 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标）。Windows 指向 `assets/icon.ico`，尺寸档位与 alpha 均可控 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 View 菜单**：绑定系统缩放 role（`resetZoom`/`zoomIn`/`zoomOut`）。上游用自定义菜单整体替换了 Electron 默认菜单却未补 View 菜单，导致 `Cmd +/-/0` 完全无响应。菜单文案走 locale 字典 |
+| `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 Edit 菜单**：绑定系统剪贴板 role（`undo`/`redo`/`cut`/`copy`/`paste`/`selectAll`）。与上面 View 菜单同一根因——上游自定义菜单整体替换了默认菜单却未补 Edit 菜单，macOS 上 `Cmd+C/V/X/A/Z` 因此全部无响应。菜单文案走 locale 字典 |
+| `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 File 与 Window 菜单**（坑 15）：File 绑 `close`（`Cmd+W` 关窗）、Window 用系统 `windowMenu`（`Cmd+M` 最小化 / Zoom）。这是同一根因的第三、四次——上游自定义菜单替换默认菜单后，View / Edit / File / Window **四组 role 全部缺失**。`Cmd+W` 可用也是「关窗不退出」体验的前提：关窗后后端仍在跑，点 Dock 重开是秒开 |
+| `apps/desktop/src/main.ts` | **标题栏变白**（坑 16）：`nativeTheme.themeSource = 'light'` 强制应用使用浅色外观，macOS 原生标题栏随之由深灰变为白色。做法借鉴 `~/MyApps/DSChat` |
+| `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **标题栏文字留空**（坑 16）：窗口标题不再跟随页面 `document.title`——harness 把当前对话名写进 `<title>`，标题栏会多出一行与界面内对话标题重复的小字。做法是 `title: ''` + 监听 `page-title-updated` 阻止改写，**布局不变**（不用 `titleBarStyle`，那会改布局） |
 | `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
 | `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 各档 PNG → `icon.icns`（mac）/ `icon.ico`（Windows，见坑 14）的生成脚本；接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
+| `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本** |
+| `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**零上游文件改动** |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
 | `scripts/release/tarball.ts`、`apps/desktop/scripts/prepare-package-set.ts` | **Windows 必需**：新增 `captureTarball()`，只把文件名交给 `tar`、目录走 `cwd`，避免 Windows 盘符被 GNU tar 当成远程主机（坑 12）。对 macOS/Linux 行为等价 |
 | `apps/desktop/assets/icon.ico`（新增） | Windows 图标：16/24/32/48/64/128/256 共 7 档，PNG 内嵌、保留 alpha |
@@ -250,7 +260,79 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **修复**：`id: deepseek-v4-flash`（底层真名）＋ `name: DeepSeek V4.1 Flash`（展示名），`agent-default-model.model` 同步改为 `deepseek-v4-flash`。网关实测两个名字**当前都返回 200**，但过期名随时失效，不要等它挂掉。
 - **教训**：换模型时改 `id`，不要改 `name`；名字里带日期的代号一律视为临时。
 
-### 坑 12（Windows 专有）：`tar` 把盘符当成远程主机
+### 坑 12：桌面端不弹通知，系统设置里也找不到这个应用
+
+- **现象**：插件装好、app 重启过，但「系统设置 → 通知」列表里根本没有 `DeepSeek Harness`。
+- **根因（两条叠加）**：
+  1. **macOS 只在应用第一次成功发出通知之后，才把它登记进通知列表**。没成功发过，设置里就不会有这一项 —— 这不是权限被拒，而是压根还没注册。
+  2. 插件按设计**只在窗口失焦时**才提醒（正看着窗口就不打扰），于是「盯着窗口等结果」这种最常见的用法，永远触发不了那个第一次。
+- **取证方式**（系统层，不必读代码）：
+  ```bash
+  # 通知库里有没有登记（无输出＝没登记）
+  defaults read com.apple.ncprefs apps | grep -i sankuai
+  # LaunchServices 是否认可它有通知能力（出现 NOTIFICATION#: 即认可）
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | grep -A2 com.sankuai.dsh
+  ```
+  实测结论：LaunchServices 有 `NOTIFICATION#:com.sankuai.dsh`，而通知库里没有它 —— 即「系统认可该应用能发通知，但它一次都没发过」。
+- **修复**：插件首次加载时主动弹一条「DeepSeek Harness 通知已启用」确认；只有确认真的显示过才用 `localStorage` 记账，否则下次启动重试。重启一次即可在设置里看到本应用，且不会反复打扰。
+
+### 坑 13：403 一律被读成「认证失败」
+
+- **现象**（在 dsh-desktop 上观察到）：网关返回 403 时错误码一律是 `AUTH`，读起来像 API key 失效。
+- **根因**：`packages/llm/llm-pi-ai/src/stream.ts` 的 `classifyPiAiError` 用 `/\b(?:401|403)\b/` 一条正则同时匹配 401 与 403，都返回 `AUTH`；而 403 是「已认证但无权访问」，与 401 的「认证失败」是两类问题。
+- **修复**：配额判定（`isQuotaExceededError`）提到状态码之前，401 仍归 `AUTH`，403 拆成独立的 `FORBIDDEN`。
+- **验证**：`convert.spec.ts` 新增两条断言（`HTTP 403: Forbidden` → `FORBIDDEN`、`HTTP 403: insufficient_quota` → `QUOTA`），与原有 95 项合跑全通过；`pnpm run typecheck` 退出码 0。**尚未在真实网关上验过 403 场景。**
+- **注**：`FORBIDDEN` 是 0.1.5-rc.2 里没有的新错误码——界面直接展示码文本，默认重试列表不含它（与 `AUTH` 同样不重试）。来源是 dsh-desktop 的 `@deepseek-ai+dsh-llm-pi-ai` 补丁。
+
+### 坑 14：预设模式与模型请求的模式相同时报 `not strictly wider`
+
+- **现象**（在 dsh-desktop 上观察到）：模型带着 `sandbox_permissions` 调用 bash，返回 `sandbox escalation to "workspace-write" is not strictly wider than this call's current "workspace-write" mode`，命令没有执行。
+- **根因**：`packages/sandbox/sandbox/src/escalation.ts` 的 `approveEscalation` 只认「严格变宽」——`WIDER_MODES[effectiveMode]` 不含 `effectiveMode` 自身，请求与当前模式相等时被判为非法。
+- **修复**：`mode === effectiveMode` 时直接返回 `effectiveMode`，权限边界不变，也不再抛错。
+- **验证**：`escalation.spec.ts` 新增「相等即放行、不询问用户」用例；`tool-bash` / `tool-pwsh` 的用例改用真正的更窄场景（`danger-full-access` 预设请求 `workspace-write`），三个文件合跑 146 项全通过；`pnpm run typecheck` 退出码 0。**尚未在真实会话里验过模型触发路径。**
+- **注**：与 `docs/换机恢复指南.md` 里「报 `not strictly wider` → 权限预设是最高档 `danger-full-access`」是同一报错的两个来源——那条修的是预设过高，本条修的是预设与模型请求相等。来源是 dsh-desktop 的 `@deepseek-ai+dsh-sandbox` 补丁。
+- **顺带排除的怀疑**：本机 app 是 ad-hoc 签名（`codesign --force --sign -`，必要性见 build-app.sh 注释），实测**不影响通知发送**；被 macOS 拒绝的是完全未签名的二进制。
+
+### 坑 15：`Cmd+W` / `Cmd+M` 完全无响应
+
+- **现象**：按 `Cmd+W` 关窗没有任何反应，只能点窗口左上角的红叉；`Cmd+M` 同样无效。
+- **根因**：与 View、Edit 菜单**是同一个根因的延续**——上游用自定义菜单整体替换了 Electron 默认菜单，替换后 View / Edit / File / Window 四组 role 全部缺失。`Cmd+W` 的标准绑定是 File 菜单的 `close` role、`Cmd+M` 是 Window 菜单的 `minimize`，两者都不存在，按键自然无声无息。
+- **修复**：加 File 菜单（`close` role）与 Window 菜单（系统 `windowMenu`，自带 Minimize / Zoom）。
+- **为什么值得修**：`Cmd+W` 可用是「关窗不退出」体验的前提——macOS 上关窗后 app 进程不退出（`apps/desktop/src/main.ts` 的 `window-all-closed` 只在非 darwin 才调 `app.quit()`），后端保持就绪，此时点 Dock 重开是**秒开**（实测验证过），完全跳过下面那 4 秒启动；只有 `Cmd+Q` 才需要重新付这个成本。
+
+### 坑 16：界面是浅色、标题栏却跟着深色系统走
+
+- **现象**：系统是深色模式、应用界面选了浅色主题，但窗口顶部的原生标题栏是深灰，与界面不搭。
+- **根因**：macOS 的原生标题栏由**系统外观**绘制，与应用自己的界面主题无关；Electron 也没有「只改标题栏颜色」的 API（`titleBarOverlay` 只对 Windows / Linux 生效）。
+- **修复**：`apps/desktop/src/main.ts` 里 `nativeTheme.themeSource = 'light'` 强制应用使用浅色外观（做法借鉴 `~/MyApps/DSChat` 的 `syncWindowTheme`）。
+- **为什么本机没有副作用**：`themeSource` 影响的是 Chromium 的 `prefers-color-scheme`，而本机 `~/.dsh/settings.yaml` 的 `ui-theme.preference` 是 `light`；只有 `system` 才会去读 `prefers-color-scheme`（`packages/client/ui-theme/src/boot-theme.ts:17`），所以界面主题不受影响。**注意：若把主题改回「跟随系统」，界面会跟着标题栏一起变浅色。**
+- **启动耗时的实测结论**（顺带记录，含一条被推翻的假设）：启动页 0.31 秒出现、主界面 4.4 秒——其中 profile 准备 0.53 秒、后端 boot 加载 189 个包 / 40+ 插件约 3.5 秒。已排除网络阻塞（后端启动全程 TCP 连接数 0）。**曾假设 JS 解析是瓶颈并试过 `NODE_COMPILE_CACHE`（经 Info.plist 的 `LSEnvironment` 注入），但用 `open` 走 LaunchServices 做三次对照实测（4.02 / 3.91 / 4.21 秒）显示无差异，已移除**——那 3.5 秒是插件初始化的实际工作量，不是解析开销。
+- **真正的「秒开」路径**：关窗（`Cmd+W`）而非退出（`Cmd+Q`）——macOS 上关窗不退出进程，后端保持就绪，点 Dock 重开直接跳过整个启动流程（实测秒开）。
+- **顺带修掉的第二条**：标题栏里那行小字原本是**窗口标题**——Electron 默认让它跟随页面的 `document.title`，而 harness 写入的是「当前对话名 — DeepSeek Harness」，于是与界面内的对话标题重复。它一直都在，只是此前标题栏是深灰、字不显眼，**改成白色后才暴露出来**。修法是 `title: ''` + 监听 `page-title-updated` 阻止改写，布局不变。
+
+### 坑 17：打包慢，**别去查网络**（附实测耗时地图）
+
+- **现象**：一次 `bash packaging/build-app.sh` 约 4 分钟。日志里 pnpm 频繁打印 `downloaded 265` 和 `below 50 KiB/s`，看起来像网络瓶颈。
+- **三条排查结论（全部实测，下次别重复走）**：
+  1. **真正走网络的只有 9 个包**——判据是日志里 `below 50 KiB/s` 警告的**条数**（9 条），不是 pnpm 的 `downloaded` 数字；后者把「从本地 store 取包」也算进去了。
+  2. **`npmmirror` 不慢**：实测 320 KB/s，比官方源 npmjs（70 KB/s）**快 4.5 倍**。`build-app.sh` 的默认源已是最优，**换源无效**。
+  3. **构建是增量的**：`build:official` 热态仅 **13 秒**，不是瓶颈。
+- **耗时地图**（`prepare:desktop` 实测 154 秒，加上 electron-builder 共约 4 分钟）：
+
+  | 阶段 | 耗时 | 性质 |
+  |---|---|---|
+  | `release:pack` ×2（275 个 tarball） | **~87 秒** | **最大头**，每次全量重打 |
+  | `prepare:dsh`（组装运行时 + 装依赖） | 48 秒 | 脚本每次 `rmSync` 后重建 |
+  | `build:official` | 13 秒 | 增量，热态很快 |
+  | `prepare:runtime` + `prepare:packages` | 6 秒 | |
+  | electron-builder（含下载 electron zip） | ~1–2 分钟 | |
+
+- **已优化（2026-09-11）**：`packaging/build-app.sh` 内置快捷路径——检测到 `packages/` 自上次打包未变时，跳过 `build:official` + `release:pack`，只跑 `apps/desktop` 的 build + 三段 prepare。**实测整包 284 秒 → 58 秒**。
+  - **正确性已验证**：快捷路径产物与全量产物**逐字节一致**（`desktop-runtime.json` 的 11281 个文件哈希全同），且能正常启动（启动时的运行时自校验通过）。判据本身也做了双向实测（改一个源文件 → 正确退回全量）。
+  - **判据用文件时间戳**（`find -newer`）而非 `git status`：时间戳能同时覆盖「改了没提交」和「提交了没重建」两种漏判。任何源文件比 tarball 新、lockfile 更新、或 tarball 不存在，都退回全量；强制全量：`DSH_FORCE_FULL_BUILD=1`。
+  - **没有改任何上游脚本**——判断逻辑全在 `build-app.sh` 里。
+- **⚠️ 验证打包改动时的一个陷阱**：**打包流程本身是非确定性的**——同样源码连续跑两次全量，产物会有 **192 个 `package.json` 哈希不同**（元数据差异，不影响运行；两次全量之间也一样）。所以**不要拿「与历史基准字节比对」当判据**，那会得出假阳性（为此刻意白跑过两轮全量）。正确做法：把「待验证产物」与「刚跑完的一次全量产物」直接对比。
+### 坑 18（Windows 专有）：`tar` 把盘符当成远程主机
 
 - **现象**：`release:pack` 报
   `Error: tar -tzf D:\...\deepseek-ai-dsh-brand-0.1.5-rc.2.tgz exited with 2`，子进程输出
@@ -264,7 +346,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **以后注意**：新增读 tarball 的地方一律走 `captureTarball`，不要再写
   `capture('tar', [..., 绝对路径])`。
 
-### 坑 13（Windows 专有）：`prepare:dsh` 依赖 Unix 的 `patch`
+### 坑 19（Windows 专有）：`prepare:dsh` 依赖 Unix 的 `patch`
 
 - **现象**：组装内置运行时时 `spawnSync patch ENOENT`，产出的桌面端缺少 web_search 透传补丁。
 - **根因**：`applyRuntimePatches()` 用 `execFileSync('patch', ...)` 把仓库补丁打进运行时，
@@ -273,14 +355,14 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   并注入 PATH，找不到时明确报错提示安装 Git。**不要**把补丁逻辑改成「只在 mac 生效」——
   那样 Windows 包会静默丢掉服务端 `web_search` 能力，且不会有任何报错。
 
-### 坑 14（Windows 专有）：`iconutil` 只在 macOS 存在
+### 坑 20（Windows 专有）：`iconutil` 只在 macOS 存在
 
 - **现象**：Windows 上跑 `build:icons` 报 `spawnSync iconutil ENOENT`。
 - **根因**：脚本原本无条件调 `iconutil` 生成 `.icns`，而它是 macOS 自带命令。
 - **修复**：`build-icons.mjs` 按平台分流 —— darwin 出 `.icns`，`.png` 与 `.ico` 则所有平台都出
   （Windows 打包只用后两者）。`.ico` 由脚本自己写容器，不依赖任何外部工具。
 
-### 坑 15（本机 WorkBuddy 环境专有）：删改保护会掐断打包
+### 坑 21（本机 WorkBuddy 环境专有）：删改保护会掐断打包
 
 - **现象**：构建/打包中途报
   `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":501,"threshold":500,"scope":"turn",...}`，
@@ -302,6 +384,26 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   这类自动更新元数据，未签名本机自用不需要。
 - **不要**去改 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD` 或清空相关环境变量 —— 那是绕过安全机制。
 
+### 坑 22（Windows 专有）：PowerShell 5.1 按 GBK 读「无 BOM 的 UTF-8 脚本」，中文把语法拆坏
+
+- **现象**：`packaging\install-desktop-notification.ps1` 一个字符都不输出、也不报错，
+  文件和 profile 清单都没变化；用 `Parser::ParseFile` 一查却是 **2 个语法错误**
+  （`字符串缺少终止符`、`语句块中缺少右 }`），报错行落在中文 `Write-Host` 上，
+  但报错信息里的中文本身也已经乱码（`Write-Host "宸茬櫥璁?profile bundles锛?`）。
+- **根因**：Windows PowerShell 5.1 **没有 BOM 的 .ps1 一律按当前 ANSI 代码页（本机 936/GBK）解码**，
+  UTF-8 的中文被逐字节拆开后，某些字节对恰好凑出 `"`，于是字符串字面量提前闭合、后半个文件全乱。
+  `pwsh`（PowerShell 7）默认按 UTF-8 读，同样的文件**不会**出问题 —— 所以这是「5.1 专属」的坑，
+  在 7 上排查半天也复现不了。
+- **修复**：所有含非 ASCII 的 `.ps1` 存成 **UTF-8 with BOM**（`build-app.ps1`、
+  `install-desktop-notification.ps1` 都已补上）。校验：
+  ```bash
+  head -c 3 packaging/install-desktop-notification.ps1 | xxd -p   # 应为 efbbbf
+  ```
+- **⚠️ 反过来**：`.cmd` / `.bat` **不能**加 BOM（`dsh.cmd`、`dsh-tui.cmd` 就是无 BOM 的），
+  cmd.exe 会把 BOM 当成命令的一部分报错。所以「统一加 BOM」是错的，要按扩展名分流。
+- **排查姿势**：脚本静默无输出时，先用
+  `[System.Management.Automation.Language.Parser]::ParseFile($p,[ref]$t,[ref]$e)` 看 `$e.Count`，
+  比反复试跑快得多。
 ## 五、换机恢复清单
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0（`corepack enable --install-directory ~/.local/bin && corepack pnpm -v` 应输出 11.7.0）、Xcode Command Line Tools。
@@ -310,6 +412,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    git clone <你的 fork> ~/MyApps/deepseek-harness && cd ~/MyApps/deepseek-harness
    pnpm install && pnpm run build:official
    ```
+   重建 `CLAUDE.local.md`（二开规则，被 `.gitignore` 排除故不进仓库）：按第八节全文 `cat > CLAUDE.local.md` 粘贴。
 3. **装 CLI 启动器**：`ln -sf "$PWD/packaging/dsh" ~/.local/bin/dsh && dsh --version`
 4. **恢复 `~/.dsh` 配置**（独立私有仓库 `git@github.com:wentao-hu/.dsh.git`，含密钥，已同步）：
    ```bash
@@ -339,6 +442,9 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    ```
    最后双击应用发一句「搜索并总结今天的一条主要科技新闻」——能给出当日真实新闻，即代表服务端搜索生效。
 
+   通知链路：首次启动应弹一条「DeepSeek Harness 通知已启用」；切到别的应用后发一条消息，跑完应弹「第 N 回合已完成」。此时「系统设置 → 通知」里能看到本应用。
+   profile 由应用首次启动时生成，插件装不进去时隔一层排查：`bash packaging/install-desktop-notification.sh`（幂等，可随时重跑）。
+
 ### Windows 侧（`for_windows` 分支）
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0、**Git for Windows**（提供 `patch.exe`）。
@@ -356,10 +462,22 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
      若不需要该行为，用 `pnpm_config_verify_deps_before_run=false` 前缀跳过
      （注意是 **pnpm_config_**，不是 `npm_config_`）。
 4. **打包桌面端**：`powershell -ExecutionPolicy Bypass -File packaging\build-app.ps1`
+   - 脚本末尾会自动跑一次通知插件安装（第 [3/3] 步）。但 desktop profile 由应用**首次启动**时生成，
+     首次打包时它多半还不存在 —— 那就等应用跑过一次再手动执行一次：
+     `powershell -ExecutionPolicy Bypass -File packaging\install-desktop-notification.ps1`（幂等）。
+   - 与 mac 侧 `build-app.sh` 的差异：mac 侧第 [1/5] 步有「packages/ 未变则跳过 build:official +
+     release:pack」的快捷路径（整包 284 秒 → 58 秒）。Windows 侧**没有移植**该逻辑 ——
+     Windows 走官方 `package:desktop:win:x64:unsigned`（`scripts/package-target.ts`）一条命令到底，
+     判据没法只写在 ps1 里。真要提速得改上游的 package-target.ts，暂不做。
 5. **装 CLI**：把 `packaging` 目录加入 PATH，`dsh --version` 应输出 `0.1.5-rc.2`。
 6. **恢复 `~/.dsh` 配置**：在 `%USERPROFILE%\.dsh` 下放 `settings.yaml` 与 `.env`，内容同 mac 侧
    （⚠️ 变量名不能带 `DSH_` 前缀；YAML 里 `"off"` 必须加引号）。
-
+7. **验证通知链路**：完全退出桌面应用再打开 → 首次启动应弹一条「DeepSeek Harness 通知已启用」；
+   切到别的应用后发一条消息，跑完应弹「第 N 回合已完成」。
+   profile 里没装上时重跑第 4 步的安装脚本；插件只在启动时加载，改完必须重启应用。
+   ⚠️ 本机**尚未在真实运行中验证过 Windows 通知的实际弹出**（mac 侧的坑 12 讲的是 macOS 的
+   通知注册时机，Windows 上还多一个 AppUserModelId 因素 —— NSIS 安装包会建快捷方式，
+   通常够用，但若弹不出来先查这一项）。
 ## 六、跟随上游更新
 
 ```bash
@@ -400,3 +518,54 @@ bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force
 `launchctl load -w` 它；首次运行只记基线、不发通知。
 
 ⚠️ **写这个脚本时的坑**：`$变量` 后面紧跟中文标点时必须写成 `${变量}`。实测 `${SUB:+$SUB；}` 会让 bash 把全角分号并进变量名，报 `unbound variable: SUB；` 并让整个任务以非零码退出。
+
+## 八、二开规则（`CLAUDE.local.md`）
+
+仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，写的是本 fork 的两条最高约束（**每周一上游追踪链路必须可用**、**换机后二开功能必须完整可用**）与改功能时的收敛要求。它被上游 `.gitignore` 第 1 行排除、不进 git——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
+
+````markdown
+# 本项目二开规则
+
+本仓库是 `deepseek-ai/deepseek-harness` 的 fork。**与上游保持可同步、且二开成果不丢失，是两条最高约束。**
+
+## 一、每周一自动追踪上游，链路必须保持可用
+
+launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library/Application Support/dsh-sync/check-upstream.sh`，检查上游 `deepseek-ai/deepseek-harness` 的新提交与本 fork 落后多少；有更新则写报告到桌面并弹通知，无更新静默退出。
+
+**做任何功能改动时不得破坏这条链路**：
+
+- 不碰 `.github/workflows/`、根 `scripts/`、`AGENTS.md`（含 `CLAUDE.md` 符号链接，`packages/` 下同）
+- 不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——脚本靠它们算落后量
+- 二开规则只写在本文件，不要写进上游的 `AGENTS.md`
+- **自检**：`bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force` 能正常出报告，即为链路完好（脚本走 GitHub API，不依赖本地工作区状态）
+
+## 二、换机后二开功能必须完整可用
+
+换新 Mac 时按 `packaging/README.md` 第五节「换机恢复清单」操作（含 `~/.dsh` 私有仓库恢复、每周一追踪任务重建）。**恢复完必须逐项实测二开功能**：
+
+| 二开功能 | 怎么验 |
+|---|---|
+| CLI 启动器 | `dsh --version` 输出 `0.1.5-rc.2` |
+| Edit / View / File / Window 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应，`Cmd+W` 能关窗、`Cmd+M` 能最小化（上游自定义菜单把 View / Edit / File / Window 四组 role 全漏了，是本 fork 补的） |
+| 标题栏 | 白色底、无文字（只剩红黄绿按钮）——即使在深色系统下也应是白的（`nativeTheme.themeSource = 'light'`） |
+| 应用图标 | Dock 里不是 Electron 默认图标 |
+| 桌面完成通知 | 窗口失焦时跑完一回合，弹「第 N 回合已完成」 |
+| 服务端原生搜索 | app 里问「今天的一条科技新闻」，能给出当日真实新闻 |
+| 沙箱提权放行 | 模型把提权字段填成当前模式时不再报 `not strictly wider` |
+| 403 错误分类 | 网关返 403 时显示 `FORBIDDEN` 而非 `AUTH` |
+| **本规则文件** | 本文件存在。它被上游 `.gitignore` 排除、不进 git，需按 `packaging/README.md` 第八节全文重建 |
+
+## 三、改功能时的约束（保护上面两条）
+
+1. **改动收敛**：能放 `packaging/`（本 fork 专属区）就不动上游源码；必须改上游源码时，改动点写进 `packaging/README.md` 第三节「改动清单」——那是 `git merge upstream/master` 时唯一的冲突面清单，漏登记等于下次合并时丢改动。
+2. **被忽略但必需的文件**：`packaging/desktop-notification/lib/` 是手写源码（不是构建产物），却被上游 `lib/` 的忽略规则命中，提交时必须 `git add -f`——**不要改上游 `.gitignore`**。
+3. **打包一律用 `bash packaging/build-app.sh`，别自己拼命令**：它内置快捷路径——`packages/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**（产物与全量逐字节一致，已实测）；需要强制全量时设 `DSH_FORCE_FULL_BUILD=1`。耗时地图与排查陷阱见 `packaging/README.md` 坑 17——**尤其别去查网络**（真正走网络的只有 9 个包）。
+
+## 四、二开产物位置
+
+- 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
+- 桌面端改动：`apps/desktop/`
+- 桌面通知插件：`packaging/desktop-notification/`（零上游文件改动）
+````
+
+**为什么放 `CLAUDE.local.md` 而不是 `AGENTS.md`**：`AGENTS.md` 是上游文件（根 `CLAUDE.md` 与 `packages/CLAUDE.md` 都是它的符号链接），往里写规则会扩大跟随上游 `git merge` 的冲突面，与规则本身要保护的目标相悖。

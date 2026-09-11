@@ -141,21 +141,27 @@ export interface EscalationRequest {
 }
 
 /**
- * Resolve a sandbox-escalation request BEFORE anything executes: check strict
- * widening against the call's effective mode, then resolve the approval
- * channel, then map every outcome — the ordered fail-closed sequence both
- * enforcing families share. Returns the granted mode to stamp onto exactly
- * this call; throws the distinct verbatim text for every other path (a
- * non-widening request, a missing approval service, an agent-less execution,
- * a rejection, a cancellation, an unanswerable ask) — the tool registry turns
- * the throw into the call's isError result, and nothing has run. A
- * non-widening request never prompts a human.
+ * Resolve a sandbox-escalation request BEFORE anything executes: a request
+ * naming the call's OWN effective mode is granted outright (nothing widens, so
+ * no approval is owed), otherwise check strict widening against the call's
+ * effective mode, then resolve the approval channel, then map every outcome —
+ * the ordered fail-closed sequence both enforcing families share. Returns the
+ * granted mode to stamp onto exactly this call; throws the distinct verbatim
+ * text for every other path (a non-widening request, a missing approval
+ * service, an agent-less execution, a rejection, a cancellation, an
+ * unanswerable ask) — the tool registry turns the throw into the call's
+ * isError result, and nothing has run. A non-widening request never prompts a
+ * human.
  * @param request - the escalation to judge (see {@link EscalationRequest}).
  * @param approval - the approval ingredients the tool holds (see {@link EscalationApproval}).
  * @returns the granted mode, consumed by the one call that asked.
  */
 export async function approveEscalation<A, C>(request: EscalationRequest, approval: EscalationApproval<A, C>): Promise<SandboxMode> {
   const { requestedMode: mode, effectiveMode, justification, subject } = request
+  // 二次开发：请求的模式就是当前模式时，这次调用没有提权需求，直接按当前模式放行。
+  // 放行返回的就是 effectiveMode，权限边界不变；上游的 "not strictly wider" 报错
+  // 只会挡住一条本可执行的调用，让模型多跑一轮无谓的重试。
+  if (mode === effectiveMode) return effectiveMode
   // Strict widening is an EXECUTION check against the call's effective mode —
   // deliberately not a schema constraint (the enum is the closed target
   // vocabulary; the effective mode is per-call truth).

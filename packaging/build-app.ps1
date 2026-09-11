@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Windows 端一条命令产出可安装运行的 DeepSeek Harness 桌面端（本机未签名自用）。
@@ -118,7 +118,7 @@ if ($stashed.Count -gt 0) {
 }
 
 # --- [5/5] 走官方未签名通道打包 ---
-Write-Host '==> [1/2] 准备运行时并执行 electron-builder（构建 + 组装 + 打补丁 + 哈希清单）'
+Write-Host '==> [1/3] 准备运行时并执行 electron-builder（构建 + 组装 + 打补丁 + 哈希清单）'
 Push-Location $repoRoot
 try {
   & pnpm run package:desktop:win:x64:unsigned
@@ -129,7 +129,7 @@ try {
 
 $artifacts = Join-Path $repoRoot 'apps\desktop\.desktop-build\targets\win-x64\unsigned-artifacts'
 Write-Host ''
-Write-Host '==> [2/2] 产物'
+Write-Host '==> [2/3] 产物'
 if (Test-Path $artifacts) {
   Get-ChildItem -Path $artifacts -Filter '*.exe' | ForEach-Object { Write-Host "    $($_.FullName)" }
   if ($KeepUnpacked) {
@@ -139,5 +139,17 @@ if (Test-Path $artifacts) {
 } else {
   Write-Host "    （未找到产物目录 $artifacts）"
 }
+
+# --- [3/3] 安装桌面通知插件 ---
+# 与 mac 侧 build-app.sh 的第 [5/5] 步对应：profile 由应用首次启动时生成，
+# 所以这一步通常要等应用跑过一次才真正生效（脚本自身幂等，随时可重跑）。
+Write-Host ''
+Write-Host '==> [3/3] 安装桌面通知插件'
+try {
+  & (Join-Path $PSScriptRoot 'install-desktop-notification.ps1')
+} catch {
+  Write-Host "    提示：通知插件未安装（$($_.Exception.Message)），不影响已产出的安装包。"
+}
+
 Write-Host ''
 Write-Host '双击安装包即可安装；安装后首次启动会在 $DSH_HOME（默认 %USERPROFILE%\.dsh）下生成 profiles\desktop。'

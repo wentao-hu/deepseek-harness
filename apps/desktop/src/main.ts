@@ -9,6 +9,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   protocol,
   type IpcMainInvokeEvent,
 } from 'electron'
@@ -94,6 +95,9 @@ function createWindow(preload: string, show = false): BrowserWindow {
     minWidth: 880,
     minHeight: 600,
     show,
+    // 二次开发：标题留空，且不让页面改写它（见下方 page-title-updated 监听）。
+    title: '',
+    backgroundColor: '#ffffff',
     webPreferences: {
       preload,
       nodeIntegration: false,
@@ -102,6 +106,10 @@ function createWindow(preload: string, show = false): BrowserWindow {
       webSecurity: true,
     },
   })
+  // 二次开发：阻止窗口标题跟随页面 document.title。harness 会把当前对话名写进
+  // <title>（"对话名 — DeepSeek Harness"），于是标题栏多出一行与界面内对话标题
+  // 重复的小字。这里挡住改写，标题保持空白；布局不受影响。
+  window.on('page-title-updated', (event) => { event.preventDefault() })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => {
     if (new URL(url).protocol !== `${SCHEME}:`) event.preventDefault()
@@ -434,6 +442,9 @@ async function main(): Promise<void> {
     void pluginWindow.loadURL(`${SCHEME}://shell/plugin-manager.html`)
   }
 
+  // 二次开发：强制浅色外观，让 macOS 原生标题栏由深灰变白（借鉴 DSChat 的做法）。
+  // 代价：界面主题在「跟随系统」时会一并解析成浅色——它读的是 prefers-color-scheme。
+  nativeTheme.themeSource = 'light'
   Menu.setApplicationMenu(Menu.buildFromTemplate([{
     label: process.platform === 'darwin' ? app.name : messages.application,
     submenu: [
@@ -448,11 +459,36 @@ async function main(): Promise<void> {
       { role: 'quit' },
     ],
   }, {
+    label: messages.fileMenu,
+    submenu: [
+      { role: 'close', label: messages.closeWindowMenu },
+    ],
+  }, {
+    label: messages.editMenu,
+    submenu: [
+      { role: 'undo', label: messages.undoMenu },
+      { role: 'redo', label: messages.redoMenu },
+      { type: 'separator' },
+      { role: 'cut', label: messages.cutMenu },
+      { role: 'copy', label: messages.copyMenu },
+      { role: 'paste', label: messages.pasteMenu },
+      { role: 'selectAll', label: messages.selectAllMenu },
+    ],
+  }, {
     label: messages.viewMenu,
     submenu: [
       { role: 'resetZoom', label: messages.zoomActualSizeMenu },
       { role: 'zoomIn', label: messages.zoomInMenu },
       { role: 'zoomOut', label: messages.zoomOutMenu },
+    ],
+  }, {
+    // 手写子项而不用系统 windowMenu role：role 自带的子项文案是 Electron 硬编码的
+    // 英文（Minimize / Zoom），与其余菜单的中文文案不一致。代价是不再出现 macOS 的
+    // 窗口管理项（填充 / 居中 / 平铺等），换来 Cmd+M 与其余菜单同语言。
+    label: messages.windowMenu,
+    submenu: [
+      { role: 'minimize', label: messages.minimizeMenu },
+      { role: 'zoom', label: messages.zoomMenu },
     ],
   }]))
 

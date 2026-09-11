@@ -1,0 +1,6 @@
+# Desktop notification bundle patch: inserts the plugin row whose package
+# declares `dsh.client`, so the host composes its browser half into the boot
+# graph and the Electron renderer loads it.
+- insert:
+    - id: desktop-notification
+      name: dsh-desktop-notification
