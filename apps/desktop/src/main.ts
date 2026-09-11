@@ -447,6 +447,13 @@ async function main(): Promise<void> {
       { type: 'separator' },
       { role: 'quit' },
     ],
+  }, {
+    label: messages.viewMenu,
+    submenu: [
+      { role: 'resetZoom', label: messages.zoomActualSizeMenu },
+      { role: 'zoomIn', label: messages.zoomInMenu },
+      { role: 'zoomOut', label: messages.zoomOutMenu },
+    ],
   }]))
 
   const createMainWindow = (): BrowserWindow => {

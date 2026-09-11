@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MenuItemConstructorOptions } from 'electron'
 import { join } from 'node:path'
 import { DESKTOP_IPC } from '../src/ipc.ts'
 
@@ -75,6 +76,10 @@ const harness = await vi.hoisted(async () => {
   return {
     windows, hosts, handlers, app, FakeWindow, FakeHost,
     dialog: { showErrorBox: vi.fn(), showMessageBox: vi.fn() },
+    menu: {
+      setApplicationMenu: vi.fn(),
+      buildFromTemplate: vi.fn<(template: MenuItemConstructorOptions[]) => void>(),
+    },
     applyRelease: vi.fn(() => { preparing.resolve(); return prepared.promise }),
     assertProfileRuntime: vi.fn(),
     canRecoverProfile: vi.fn(() => true),
@@ -101,7 +106,7 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, handler: (event: { senderFrame: { url: string } }) => unknown) => { harness.handlers.set(channel, handler) },
   },
-  Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn() },
+  Menu: harness.menu,
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
 }))
 vi.mock('../src/paths.ts', () => ({ resolveDesktopPaths: () => ({ profile: 'desktop-test-profile' }) }))
@@ -165,6 +170,15 @@ describe('desktop main startup', () => {
     await exited.promise
     expect(harness.app.exit).toHaveBeenCalledWith(1)
     expect(console.error).toHaveBeenCalledWith(expect.objectContaining({ message: 'emergency navigation failed' }))
+  })
+
+  it('binds the system zoom commands in the application menu', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const [template] = harness.menu.buildFromTemplate.mock.calls[0]!
+    const submenus = template.flatMap(item => Array.isArray(item.submenu) ? [item.submenu] : [])
+    const view = submenus.find(submenu => submenu.some(entry => entry.role === 'resetZoom'))
+    expect(view?.map(entry => entry.role)).toEqual(['resetZoom', 'zoomIn', 'zoomOut'])
   })
 
   it('withholds profile recovery after application resources fail to load', async () => {
