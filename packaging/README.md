@@ -103,6 +103,9 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `apps/desktop/electron-builder.config.mjs` | **3 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标） |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 View 菜单**：绑定系统缩放 role（`resetZoom`/`zoomIn`/`zoomOut`）。上游用自定义菜单整体替换了 Electron 默认菜单却未补 View 菜单，导致 `Cmd +/-/0` 完全无响应。菜单文案走 locale 字典 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 Edit 菜单**：绑定系统剪贴板 role（`undo`/`redo`/`cut`/`copy`/`paste`/`selectAll`）。与上面 View 菜单同一根因——上游自定义菜单整体替换了默认菜单却未补 Edit 菜单，macOS 上 `Cmd+C/V/X/A/Z` 因此全部无响应。菜单文案走 locale 字典 |
+| `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 File 与 Window 菜单**（坑 15）：File 绑 `close`（`Cmd+W` 关窗）、Window 用系统 `windowMenu`（`Cmd+M` 最小化 / Zoom）。这是同一根因的第三、四次——上游自定义菜单替换默认菜单后，View / Edit / File / Window **四组 role 全部缺失**。`Cmd+W` 可用也是「关窗不退出」体验的前提：关窗后后端仍在跑，点 Dock 重开是秒开 |
+| `apps/desktop/src/main.ts` | **标题栏变白**（坑 16）：`nativeTheme.themeSource = 'light'` 强制应用使用浅色外观，macOS 原生标题栏随之由深灰变为白色。做法借鉴 `~/MyApps/DSChat` |
+| `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **标题栏文字留空**（坑 16）：窗口标题不再跟随页面 `document.title`——harness 把当前对话名写进 `<title>`，标题栏会多出一行与界面内对话标题重复的小字。做法是 `title: ''` + 监听 `page-title-updated` 阻止改写，**布局不变**（不用 `titleBarStyle`，那会改布局） |
 | `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
 | `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns` 的生成脚本；接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
@@ -227,6 +230,23 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **注**：与 `docs/换机恢复指南.md` 里「报 `not strictly wider` → 权限预设是最高档 `danger-full-access`」是同一报错的两个来源——那条修的是预设过高，本条修的是预设与模型请求相等。来源是 dsh-desktop 的 `@deepseek-ai+dsh-sandbox` 补丁。
 - **顺带排除的怀疑**：本机 app 是 ad-hoc 签名（`codesign --force --sign -`，必要性见 build-app.sh 注释），实测**不影响通知发送**；被 macOS 拒绝的是完全未签名的二进制。
 
+### 坑 15：`Cmd+W` / `Cmd+M` 完全无响应
+
+- **现象**：按 `Cmd+W` 关窗没有任何反应，只能点窗口左上角的红叉；`Cmd+M` 同样无效。
+- **根因**：与 View、Edit 菜单**是同一个根因的延续**——上游用自定义菜单整体替换了 Electron 默认菜单，替换后 View / Edit / File / Window 四组 role 全部缺失。`Cmd+W` 的标准绑定是 File 菜单的 `close` role、`Cmd+M` 是 Window 菜单的 `minimize`，两者都不存在，按键自然无声无息。
+- **修复**：加 File 菜单（`close` role）与 Window 菜单（系统 `windowMenu`，自带 Minimize / Zoom）。
+- **为什么值得修**：`Cmd+W` 可用是「关窗不退出」体验的前提——macOS 上关窗后 app 进程不退出（`apps/desktop/src/main.ts` 的 `window-all-closed` 只在非 darwin 才调 `app.quit()`），后端保持就绪，此时点 Dock 重开是**秒开**（实测验证过），完全跳过下面那 4 秒启动；只有 `Cmd+Q` 才需要重新付这个成本。
+
+### 坑 16：界面是浅色、标题栏却跟着深色系统走
+
+- **现象**：系统是深色模式、应用界面选了浅色主题，但窗口顶部的原生标题栏是深灰，与界面不搭。
+- **根因**：macOS 的原生标题栏由**系统外观**绘制，与应用自己的界面主题无关；Electron 也没有「只改标题栏颜色」的 API（`titleBarOverlay` 只对 Windows / Linux 生效）。
+- **修复**：`apps/desktop/src/main.ts` 里 `nativeTheme.themeSource = 'light'` 强制应用使用浅色外观（做法借鉴 `~/MyApps/DSChat` 的 `syncWindowTheme`）。
+- **为什么本机没有副作用**：`themeSource` 影响的是 Chromium 的 `prefers-color-scheme`，而本机 `~/.dsh/settings.yaml` 的 `ui-theme.preference` 是 `light`；只有 `system` 才会去读 `prefers-color-scheme`（`packages/client/ui-theme/src/boot-theme.ts:17`），所以界面主题不受影响。**注意：若把主题改回「跟随系统」，界面会跟着标题栏一起变浅色。**
+- **启动耗时的实测结论**（顺带记录，含一条被推翻的假设）：启动页 0.31 秒出现、主界面 4.4 秒——其中 profile 准备 0.53 秒、后端 boot 加载 189 个包 / 40+ 插件约 3.5 秒。已排除网络阻塞（后端启动全程 TCP 连接数 0）。**曾假设 JS 解析是瓶颈并试过 `NODE_COMPILE_CACHE`（经 Info.plist 的 `LSEnvironment` 注入），但用 `open` 走 LaunchServices 做三次对照实测（4.02 / 3.91 / 4.21 秒）显示无差异，已移除**——那 3.5 秒是插件初始化的实际工作量，不是解析开销。
+- **真正的「秒开」路径**：关窗（`Cmd+W`）而非退出（`Cmd+Q`）——macOS 上关窗不退出进程，后端保持就绪，点 Dock 重开直接跳过整个启动流程（实测秒开）。
+- **顺带修掉的第二条**：标题栏里那行小字原本是**窗口标题**——Electron 默认让它跟随页面的 `document.title`，而 harness 写入的是「当前对话名 — DeepSeek Harness」，于是与界面内的对话标题重复。它一直都在，只是此前标题栏是深灰、字不显眼，**改成白色后才暴露出来**。修法是 `title: ''` + 监听 `page-title-updated` 阻止改写，布局不变。
+
 ## 五、换机恢复清单
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0（`corepack enable --install-directory ~/.local/bin && corepack pnpm -v` 应输出 11.7.0）、Xcode Command Line Tools。
@@ -311,24 +331,48 @@ bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force
 
 ## 八、二开规则（`CLAUDE.local.md`）
 
-仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，约束「做功能改动时不让上游追踪链路受影响」。它**被上游 `.gitignore` 第 1 行排除，不进 git**——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
+仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，写的是本 fork 的两条最高约束（**每周一上游追踪链路必须可用**、**换机后二开功能必须完整可用**）与改功能时的收敛要求。它被上游 `.gitignore` 第 1 行排除、不进 git——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
 
 ````markdown
 # 本项目二开规则
 
-## 同步上游优先（改任何功能前先读）
+本仓库是 `deepseek-ai/deepseek-harness` 的 fork。**与上游保持可同步、且二开成果不丢失，是两条最高约束。**
 
-本仓库是 `deepseek-ai/deepseek-harness` 的 fork，**与上游保持可同步是第一约束**。每周一由 launchd 任务 `com.steven.dsh-upstream-check` 执行 `~/Library/Application Support/dsh-sync/check-upstream.sh`，追踪上游新提交与本 fork 落后多少。做功能改动时，按下述规则保护这条链路：
+## 一、每周一自动追踪上游，链路必须保持可用
 
-1. **改动收敛**：能放 `packaging/`（本 fork 专属区）就不动上游源码；必须改上游源码时，改动点写进 `packaging/README.md` 第三节「改动清单」——那是跟随上游 `git merge upstream/master` 时唯一的冲突面清单，漏登记等于下次合并时丢改动。
-2. **不碰上游门禁与规则文件**：`.github/workflows/`、根 `scripts/`、`AGENTS.md` 及 `CLAUDE.md` 符号链接（含 `packages/AGENTS.md`、`packages/CLAUDE.md`）。二开规则写在本文件（`CLAUDE.local.md`，上游 `.gitignore` 已排除），不要写进 `AGENTS.md`。
-3. **不动历史与 remote**：不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——追踪脚本靠它们算落后量，重写历史会让报告失真。
-4. **改完自检**：`git remote -v` 两个 remote 仍正确；`bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force` 能正常出报告即为链路完好（脚本走 GitHub API，不依赖本地工作区状态，本地改动本身不会让它失灵——会失灵的是上面第 2、3 条）。
+launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library/Application Support/dsh-sync/check-upstream.sh`，检查上游 `deepseek-ai/deepseek-harness` 的新提交与本 fork 落后多少；有更新则写报告到桌面并弹通知，无更新静默退出。
 
-## 二开产物位置
+**做任何功能改动时不得破坏这条链路**：
 
-- 打包与启动器：`packaging/`（`README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
-- 桌面端改动：`apps/desktop/`（改这里要登记，见规则 1）
+- 不碰 `.github/workflows/`、根 `scripts/`、`AGENTS.md`（含 `CLAUDE.md` 符号链接，`packages/` 下同）
+- 不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——脚本靠它们算落后量
+- 二开规则只写在本文件，不要写进上游的 `AGENTS.md`
+- **自检**：`bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force` 能正常出报告，即为链路完好（脚本走 GitHub API，不依赖本地工作区状态）
+
+## 二、换机后二开功能必须完整可用
+
+换新 Mac 时按 `packaging/README.md` 第五节「换机恢复清单」操作（含 `~/.dsh` 私有仓库恢复、每周一追踪任务重建）。**恢复完必须逐项实测二开功能**：
+
+| 二开功能 | 怎么验 |
+|---|---|
+| CLI 启动器 | `dsh --version` 输出 `0.1.5-rc.2` |
+| Edit / View 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应（上游自定义菜单漏了这两组，是本 fork 补的） |
+| 应用图标 | Dock 里不是 Electron 默认图标 |
+| 桌面完成通知 | 窗口失焦时跑完一回合，弹「第 N 回合已完成」 |
+| 服务端原生搜索 | app 里问「今天的一条科技新闻」，能给出当日真实新闻 |
+| 沙箱提权放行 | 模型把提权字段填成当前模式时不再报 `not strictly wider` |
+| 403 错误分类 | 网关返 403 时显示 `FORBIDDEN` 而非 `AUTH` |
+| **本规则文件** | 本文件存在。它被上游 `.gitignore` 排除、不进 git，需按 `packaging/README.md` 第八节全文重建 |
+
+## 三、改功能时的约束（保护上面两条）
+
+1. **改动收敛**：能放 `packaging/`（本 fork 专属区）就不动上游源码；必须改上游源码时，改动点写进 `packaging/README.md` 第三节「改动清单」——那是 `git merge upstream/master` 时唯一的冲突面清单，漏登记等于下次合并时丢改动。
+2. **被忽略但必需的文件**：`packaging/desktop-notification/lib/` 是手写源码（不是构建产物），却被上游 `lib/` 的忽略规则命中，提交时必须 `git add -f`——**不要改上游 `.gitignore`**。
+
+## 四、二开产物位置
+
+- 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
+- 桌面端改动：`apps/desktop/`
 - 桌面通知插件：`packaging/desktop-notification/`（零上游文件改动）
 ````
 

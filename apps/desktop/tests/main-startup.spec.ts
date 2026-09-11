@@ -35,7 +35,8 @@ const harness = await vi.hoisted(async () => {
     readonly show = vi.fn()
     readonly focus = vi.fn()
     readonly restore = vi.fn()
-    constructor(readonly options: { show: boolean }) { super(); windows.push(this) }
+    readonly setTitle = vi.fn()
+    constructor(readonly options: { show: boolean; title?: string }) { super(); windows.push(this) }
     isDestroyed() { return this.destroyed }
     isMinimized() { return false }
     async loadURL(url: string) {
@@ -80,6 +81,7 @@ const harness = await vi.hoisted(async () => {
       setApplicationMenu: vi.fn(),
       buildFromTemplate: vi.fn<(template: MenuItemConstructorOptions[]) => void>(),
     },
+    nativeTheme: { themeSource: 'system' as string },
     applyRelease: vi.fn(() => { preparing.resolve(); return prepared.promise }),
     assertProfileRuntime: vi.fn(),
     canRecoverProfile: vi.fn(() => true),
@@ -107,6 +109,7 @@ vi.mock('electron', () => ({
     handle: (channel: string, handler: (event: { senderFrame: { url: string } }) => unknown) => { harness.handlers.set(channel, handler) },
   },
   Menu: harness.menu,
+  nativeTheme: harness.nativeTheme,
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
 }))
 vi.mock('../src/paths.ts', () => ({ resolveDesktopPaths: () => ({ profile: 'desktop-test-profile' }) }))
@@ -188,6 +191,33 @@ describe('desktop main startup', () => {
     const submenus = template.flatMap(item => Array.isArray(item.submenu) ? [item.submenu] : [])
     const edit = submenus.find(submenu => submenu.some(entry => entry.role === 'copy'))
     expect(edit?.map(entry => entry.role)).toEqual(['undo', 'redo', undefined, 'cut', 'copy', 'paste', 'selectAll'])
+  })
+
+  it('binds the window close and minimize commands in the application menu', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const [template] = harness.menu.buildFromTemplate.mock.calls[0]!
+    const submenus = template.flatMap(item => Array.isArray(item.submenu) ? [item.submenu] : [])
+    const file = submenus.find(submenu => submenu.some(entry => entry.role === 'close'))
+    expect(file?.map(entry => entry.role)).toEqual(['close'])
+    const window = submenus.find(submenu => submenu.some(entry => entry.role === 'minimize'))
+    expect(window?.map(entry => entry.role)).toEqual(['minimize', 'zoom'])
+  })
+
+  it('forces the light appearance so the native title bar renders white', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    expect(harness.nativeTheme.themeSource).toBe('light')
+  })
+
+  it('leaves the window title empty and blocks the page from setting it', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const window = harness.windows[0]!
+    expect(window.options.title).toBe('')
+    const event = { preventDefault: vi.fn() }
+    window.emit('page-title-updated', event)
+    expect(event.preventDefault).toHaveBeenCalled()
   })
 
   it('withholds profile recovery after application resources fail to load', async () => {
