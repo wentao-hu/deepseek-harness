@@ -181,6 +181,15 @@ describe('desktop main startup', () => {
     expect(view?.map(entry => entry.role)).toEqual(['resetZoom', 'zoomIn', 'zoomOut'])
   })
 
+  it('binds the system clipboard commands in the application menu', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const [template] = harness.menu.buildFromTemplate.mock.calls[0]!
+    const submenus = template.flatMap(item => Array.isArray(item.submenu) ? [item.submenu] : [])
+    const edit = submenus.find(submenu => submenu.some(entry => entry.role === 'copy'))
+    expect(edit?.map(entry => entry.role)).toEqual(['undo', 'redo', undefined, 'cut', 'copy', 'paste', 'selectAll'])
+  })
+
   it('withholds profile recovery after application resources fail to load', async () => {
     harness.canRecoverProfile.mockReturnValue(false)
     await import('../src/main.ts')

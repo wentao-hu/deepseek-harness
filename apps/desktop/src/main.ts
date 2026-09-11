@@ -448,6 +448,17 @@ async function main(): Promise<void> {
       { role: 'quit' },
     ],
   }, {
+    label: messages.editMenu,
+    submenu: [
+      { role: 'undo', label: messages.undoMenu },
+      { role: 'redo', label: messages.redoMenu },
+      { type: 'separator' },
+      { role: 'cut', label: messages.cutMenu },
+      { role: 'copy', label: messages.copyMenu },
+      { role: 'paste', label: messages.pasteMenu },
+      { role: 'selectAll', label: messages.selectAllMenu },
+    ],
+  }, {
     label: messages.viewMenu,
     submenu: [
       { role: 'resetZoom', label: messages.zoomActualSizeMenu },
