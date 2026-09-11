@@ -1,0 +1,39 @@
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 52fcb306b5512c99518e7a05cd99d6ac55c7c8f0..77a51f7bd075e2cf3302d664ebc526ff6de215c5 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -241,11 +241,29 @@ function buildParams(model, context, options, compat = getCompat(model), grammar
+     if (options?.serviceTier !== undefined) {
+         params.service_tier = options.serviceTier;
+     }
+-    if (toolPlacement.immediate.length > 0) {
+-        params.tools = convertResponsesTools(toolPlacement.immediate, {
+-            supportsStrictMode: compat.supportsStrictMode,
+-            supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
+-        });
++    // 二次开发：通过环境变量 RESPONSES_NATIVE_TOOLS 附加服务端原生工具
++    // （例如 web_search：由模型服务端执行搜索，而不是由 harness 调用本地工具）。
++    // 未设置该变量时行为与上游完全一致。
++    const nativeToolTypes = typeof process === "undefined" ? undefined : process.env?.RESPONSES_NATIVE_TOOLS;
++    const nativeTools = typeof nativeToolTypes === "string" && nativeToolTypes.trim().length > 0
++        ? nativeToolTypes.split(",").map((type) => type.trim()).filter((type) => type.length > 0).map((type) => ({ type }))
++        : [];
++    // 二次开发：剔除与服务端原生工具同名的 function 工具。
++    // 公司网关要求工具名唯一，而 harness 自带名为 web_search 的 function 工具，
++    // 与透传的 {"type":"web_search"} 撞名会返回
++    // invalid_prompt: Tool names must be unique。同名时以服务端工具为准。
++    const nativeNames = new Set(nativeTools.map((tool) => tool.type));
++    const immediateTools = nativeNames.size === 0
++        ? toolPlacement.immediate
++        : toolPlacement.immediate.filter((tool) => !nativeNames.has(tool.name));
++    if (immediateTools.length > 0 || nativeTools.length > 0) {
++        params.tools = [
++            ...convertResponsesTools(immediateTools, {
++                supportsStrictMode: compat.supportsStrictMode,
++                supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
++            }),
++            ...nativeTools,
++        ];
+     }
+     if (options?.toolChoice !== undefined) {
+         params.tool_choice = options.toolChoice;

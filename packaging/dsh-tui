@@ -1,0 +1,44 @@
+#!/bin/bash
+# 启动 DSH 交互式 TUI（Claude Code 风格的终端对话界面）。
+#
+# 实现方式：走 dsh-tui profile —— 它把社区插件 @deepseek-harness-tui/dsh-tui 挂载在官方
+# dsh-base 之上。插件把框架包声明为 peerDependencies，因此运行时用的是**安装自身**
+# （本仓库构建的 0.1.5-rc.2），而不是插件自带副本；这正是它能与本仓库共存的原因，
+# 也让 pi-ai 的 web_search 透传补丁继续生效。
+#
+# profile 名必须叫 dsh-tui：插件自带的启动器按 $DSH_HOME/profiles/dsh-tui 委托自己，
+# `/update` 自更新也依赖这个约定，改成别的名字会让它的自举/自更新失效。
+#
+# 安装：ln -sf <仓库>/packaging/dsh-tui ~/.local/bin/dsh-tui
+set -euo pipefail
+
+# 解析软链接，取本脚本真实位置，再取同目录的 dsh 启动器。
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$SOURCE_DIR/$SOURCE" ;;
+  esac
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+if [ ! -x "$HERE/dsh" ]; then
+  echo "dsh-tui: 缺少同目录的 dsh 启动器：$HERE/dsh" >&2
+  exit 1
+fi
+
+if [ ! -d "${DSH_HOME:-$HOME/.dsh}/profiles/dsh-tui" ]; then
+  echo "dsh-tui: 未找到 dsh-tui profile（${DSH_HOME:-$HOME/.dsh}/profiles/dsh-tui）" >&2
+  echo "dsh-tui: 请先执行  dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui" >&2
+  exit 1
+fi
+
+# TUI 需要真实终端；被管道重定向时提前给出可读的提示，而不是静默停住。
+if [ ! -t 1 ]; then
+  echo "dsh-tui: 当前标准输出不是终端，交互界面无法渲染。请在终端里直接运行 dsh-tui。" >&2
+  exit 1
+fi
+
+exec "$HERE/dsh" --profile dsh-tui "$@"

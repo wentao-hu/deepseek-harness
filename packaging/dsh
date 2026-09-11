@@ -1,0 +1,42 @@
+#!/bin/bash
+# 二次开发版 dsh 启动器：指向官方仓库的源码构建
+# （0.1.5-rc.2 + 「透传服务端原生 web_search」补丁）。
+#
+# 为什么不直接把构建产物 npm i -g 安装：那样它的依赖会从 registry 重新解析，
+# @earendil-works/pi-ai 会拿到未打补丁的副本，服务端 web_search 透传随之失效。
+# 指向仓库运行可让 app-boot 把 profile 的共享包链接指向仓库，
+# 从而用上 patchedDependencies 里那份打过补丁的实现。
+#
+# 安装：ln -sf <仓库>/packaging/dsh ~/.local/bin/dsh
+# （~/.local/bin 在 PATH 中先于 /opt/homebrew/bin，因此会覆盖旧的全局安装）
+set -euo pipefail
+
+# 解析软链接，取到脚本真实所在目录，再上溯到仓库根。
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$SOURCE_DIR/$SOURCE" ;;
+  esac
+done
+REPO_ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+CLI_ENTRY="$REPO_ROOT/apps/cli/lib/bin.js"
+
+if [ ! -f "$CLI_ENTRY" ]; then
+  echo "dsh: 未找到构建产物 $CLI_ENTRY" >&2
+  echo "dsh: 请先在仓库根执行  pnpm install && pnpm run build:official" >&2
+  exit 1
+fi
+
+# 必须用系统 Node：Electron 自带的 Node 会让 process.execPath 指向 Helper 可执行文件，
+# 使任何依赖 execPath 推导路径的逻辑（例如原生模块构建、Node-API 头文件定位）失败。
+NODE_BIN="${DSH_NODE:-/opt/homebrew/bin/node}"
+[ -x "$NODE_BIN" ] || NODE_BIN="$(command -v node || true)"
+if [ -z "${NODE_BIN:-}" ] || [ ! -x "$NODE_BIN" ]; then
+  echo "dsh: 找不到可用的 Node 运行时（可设 DSH_NODE 指定绝对路径）" >&2
+  exit 1
+fi
+
+exec "$NODE_BIN" "$CLI_ENTRY" "$@"

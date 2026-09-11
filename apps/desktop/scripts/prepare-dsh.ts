@@ -1,7 +1,7 @@
 /** Materialize the complete production runtime before publishing Desktop resources. */
 
-import { spawn, execFile } from 'node:child_process'
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, execFile, execFileSync } from 'node:child_process'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { createRuntimeProjectMetadata } from '../src/project-manager.ts'
@@ -38,6 +38,15 @@ const PACKAGE_SET_ROOT = BUILD_PATHS.packageSet
 const NODE = join(RUNTIME_ROOT, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
 const PNPM = join(RUNTIME_ROOT, 'pnpm', 'bin', 'pnpm.mjs')
 
+/**
+ * Registry the bundled pnpm resolves the core package set from.
+ *
+ * 二次开发：上游把它写死为 registry.npmjs.org，在访问该源不稳定或不可达的网络里，
+ * 这一步会以 ERR_PNPM_META_FETCH_FAIL 超时失败，从而完全无法产出桌面端。
+ * 允许用 DSH_DESKTOP_NPM_REGISTRY 覆盖；未设置时仍是上游的官方源，行为不变。
+ */
+const REGISTRY = process.env.DSH_DESKTOP_NPM_REGISTRY?.trim() || 'https://registry.npmjs.org/'
+
 function manifestVersion(path: string, subject: string): string {
   const manifest = JSON.parse(readFileSync(path, 'utf8')) as { version?: unknown }
   if (typeof manifest.version !== 'string') throw new Error(`desktop runtime: ${subject} has no version`)
@@ -70,7 +79,7 @@ function runPnpm(args: readonly string[]): Promise<void> {
     writeFileSync(userConfig, '')
     const child = spawn(NODE, [
       PNPM,
-      '--config.registry=https://registry.npmjs.org/',
+      `--config.registry=${REGISTRY}`,
       `--config.store-dir=${STORE_ROOT}`,
       '--config.enable-global-virtual-store=false',
       `--config.userconfig=${userConfig}`,
@@ -82,7 +91,7 @@ function runPnpm(args: readonly string[]): Promise<void> {
         ...Object.fromEntries(Object.entries(process.env).filter(([name]) => (
           name !== 'NODE_OPTIONS' && name !== 'NODE_PATH' && !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
         ))),
-        NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org/',
+        NPM_CONFIG_REGISTRY: REGISTRY,
         NPM_CONFIG_STORE_DIR: STORE_ROOT,
         NPM_CONFIG_USERCONFIG: userConfig,
         PATH: `${dirname(NODE)}${delimiter}${process.env.PATH ?? ''}`,
@@ -98,6 +107,47 @@ function runPnpm(args: readonly string[]): Promise<void> {
       else reject(new Error(`desktop runtime: pnpm exited with ${String(code ?? signal)}`))
     })
   })
+}
+
+/**
+ * 二次开发：需要传导到内置运行时的仓库补丁。
+ *
+ * 桌面运行时的 node_modules 是 pnpm 在临时目录里做的一次独立 prod 安装，仓库
+ * pnpm-workspace.yaml 的 patchedDependencies 只作用于仓库自身，不会传导过去。
+ * 名单只列真正属于运行时产物的包：node-pty 等补丁按上游做法不进运行时。
+ */
+const RUNTIME_PATCH_PACKAGES = new Set(['@earendil-works/pi-ai'])
+
+/**
+ * Apply the repository patches that must reach the bundled desktop runtime.
+ *
+ * 不在此处补上，打包出的桌面端就缺少本地补丁带来的能力——当前是 openai-responses
+ * 路由透传服务端原生 web_search 工具。补丁必须在 writeDesktopRuntime 计算文件哈希
+ * 之前应用，否则资源清单与实际内容不一致，启动时的运行时完整性校验会判定资源被篡改。
+ * 版本不匹配时明确跳过并打印，避免把补丁打到错误的实现上。
+ * @param runtimeRoot - the assembled runtime root about to be described and verified.
+ */
+function applyRuntimePatches(runtimeRoot: string): void {
+  const patchDir = join(resolve(APP_ROOT, '..', '..'), 'patches')
+  if (!existsSync(patchDir)) return
+  for (const name of readdirSync(patchDir).filter(entry => entry.endsWith('.patch')).sort()) {
+    const stem = name.slice(0, -'.patch'.length)
+    const separator = stem.lastIndexOf('@')
+    if (separator <= 0) continue
+    const packageName = stem.slice(0, separator).replace('__', '/')
+    if (!RUNTIME_PATCH_PACKAGES.has(packageName)) continue
+    const version = stem.slice(separator + 1)
+    const packageDir = join(runtimeRoot, 'node_modules', packageName)
+    const manifestPath = join(packageDir, 'package.json')
+    if (!existsSync(manifestPath)) continue
+    const installed = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version?: unknown }
+    if (installed.version !== version) {
+      process.stdout.write(`desktop runtime: ${packageName} is ${String(installed.version)}, not ${version}; skipped ${name}\n`)
+      continue
+    }
+    execFileSync('patch', ['-p1', '-i', join(patchDir, name)], { cwd: packageDir, stdio: 'pipe' })
+    process.stdout.write(`desktop runtime: applied ${name}\n`)
+  }
 }
 
 async function main(): Promise<void> {
@@ -133,7 +183,15 @@ async function main(): Promise<void> {
         throw new Error(`desktop runtime: missing private Host file ${file}`)
       }
     }
-    if (process.platform === 'darwin') {
+    // 必须在 writeDesktopRuntime 生成哈希清单之前执行。
+    applyRuntimePatches(DSH_OUTPUT_ROOT)
+    // 二次开发：仅在配置了签名身份时才预签名运行时。
+    // 上游在 macOS 上无条件签名并要求 Apple 证书；本机自用（不签名、不公证、不分发）
+    // 时该步骤无法完成也并非必需——本地构建的文件不带 quarantine 属性，可直接双击运行，
+    // 且 electron-builder 配置的 signIgnore 本就跳过 /Contents/Resources/dsh。
+    // 设置了 DSH_DESKTOP_MACOS_SIGNING_IDENTITY 时行为与上游完全一致。
+    const configuredSigningIdentity = process.env.DSH_DESKTOP_MACOS_SIGNING_IDENTITY?.trim()
+    if (process.platform === 'darwin' && configuredSigningIdentity !== undefined && configuredSigningIdentity !== '') {
       await signMacOSRuntime(DSH_OUTPUT_ROOT, resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env))
     }
     writeDesktopRuntime(DSH_OUTPUT_ROOT, release, packageSet.packages.map(entry => entry.name), target)

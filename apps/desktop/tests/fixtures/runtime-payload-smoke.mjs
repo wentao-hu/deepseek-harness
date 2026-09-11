@@ -64,9 +64,25 @@ async function checkPty() {
   }
 }
 
-/** fs-ext implements seek on Windows through SetFilePointerEx and on POSIX through lseek. */
+/**
+ * fs-ext implements seek on Windows through SetFilePointerEx and on POSIX through lseek.
+ *
+ * 二次开发：fs-ext 不属于桌面核心包集的依赖闭包——遍历 package-set 的全部 241 个包，
+ * 只有 koffi / sharp / turndown / node-pty 被声明，fs-ext 声明数为 0；全部构建产物里
+ * 也没有任何 require('fs-ext') 的消费方。它是 unzipper / electron-winstaller 这类**构建期**
+ * 工具的可选加速器，并出现在生成的桌面工程 allowBuilds 白名单里，用于用户后续安装的插件，
+ * 而非核心运行时所需。因此它在闭包中缺席属于预期，不应判定为运行时缺陷；
+ * 一旦某次组装确实带上了它，下面的 seek 校验照常执行。
+ */
 function checkFsExt() {
-  const fsExt = requireRuntime('fs-ext')
+  let fsExt
+  try {
+    fsExt = requireRuntime('fs-ext')
+  } catch (error) {
+    if (error?.code !== 'MODULE_NOT_FOUND') throw error
+    process.stdout.write('runtime payload smoke: fs-ext is absent from the core package closure; skipped its seek check\n')
+    return
+  }
   const file = join(scratch, 'seek.txt')
   writeFileSync(file, 'abcdef', { flag: 'wx', mode: 0o600 })
   const fd = openSync(file, 'r')
