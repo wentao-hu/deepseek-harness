@@ -70,6 +70,21 @@ bash packaging/build-app.sh
 
 脚本依次执行：准备运行时（构建 + 组装 + 打补丁 + 哈希清单）→ electron-builder 打包 → ad-hoc 签名 → 安装到 `/Applications`。热缓存下约 1 分钟。
 
+### 应用图标
+
+图标语义是「**插件轨道**」：官方鲸鱼（路径直接取自 `packages/client/ui-primitives/src/FishLogo.tsx`，未重绘）+ 环形轨道与四个节点，表示「插件围绕核心编排」。配色为品牌蓝 `#4D6BFE` → 青 `#22D3EE` 对角渐变。
+
+改图标只需替换 `apps/desktop/assets/icon.svg`，然后重新生成：
+
+```bash
+pnpm --filter @deepseek-ai/dsh-desktop build:icons
+```
+
+脚本渲染出 16 / 32 / 64 / 128 / 256 / 512 / 1024 共 10 档 PNG 并打成 `icon.icns`，同时导出 `icon.png` 供 Windows / Linux 构建使用；中间目录 `icon.iconset` 用完即删。
+
+- `icon.icns`（约 1.4MB）是打包必需资源，直接入库。偏大的原因是图标是大面积渐变 + 抗锯齿边缘，PNG 压缩率天然低；本机没有 pngcrush/optipng 之类的无损压缩工具，实测 `sips` 重编码无效果（反而略增）。
+- 图标 SVG 带 alpha，**不能用 `sips`/`qlmanage` 转 PNG**——它们会把圆角外的透明压成白底，Dock 里就是白方块。`build-icons.mjs` 走 Electron 的 Chromium 离屏渲染来保留 alpha。
+
 ## 三、改动清单（跟随上游更新的成本面）
 
 改动刻意收敛，上游 `git pull` 时需要处理的只有这几处：
@@ -80,6 +95,9 @@ bash packaging/build-app.sh
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
 | `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
 | `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
+| `apps/desktop/electron-builder.config.mjs` | **3 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标） |
+| `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
+| `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns` 的生成脚本；接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
 
@@ -152,7 +170,22 @@ bash packaging/build-app.sh
 - **根因**：执行 shell 里被注入了 `DSH_HOME`（本机为 `dsh-desktop-dev` 的 home），`dsh` 优先采用它，于是 profile 装到了那个 home；**从你自己的终端跑不会带这个变量**，所以只有自动化/嵌入场景会中招。
 - **修复**：需要锁定到默认 home 时显式清掉：`env -u DSH_HOME dsh plugin ...`。
 
+### 坑 10：bash 调用报 `"sandbox_permissions" must be a string`
 
+- **现象**：模型每次执行 bash 都失败重试两三**轮**，报 `ToolArgsError: INVALID_ARGS — "sandbox_permissions" must be a string`；重试一次后变成 `must be one of ["workspace-write","danger-full-access"]`。
+- **根因（已坐实，不是推测）**：公司网关会强制给函数工具加 `"strict": true`。OpenAI strict 模式要求**每个属性都出现在 `required` 里**，于是模型必须为「本次用不到」的可选字段填值，无值可填时只能填 `null` 或空串。而 `packages/shell/tool-bash/src/index.ts:244-269` 只把 `command`/`description` 标为必填，`sandbox_permissions`/`justification` 本就是可选的——校验器（`packages/core/tools/src/schema.ts:478` → `json-schema.ts:607`）按 schema 拒绝 `null` 与非枚举值。**即工具定义没错，是网关的 strict 改写与校验器之间的缝隙。**
+- **修复**：在 `packages/llm/llm-pi-ai/src/stream.ts` 的 `toolcall_end` 分支——参数进入校验的**最后一道关口**——把对象型参数里的 `null` 与纯空白字符串剔除；只处理对象，数组、标量原样保留，实际剔除时向 stderr 打一行诊断。
+- **验证**：改前模型执行 `date` 失败 3 次；改后**第 1 次即成功**，stderr 出现 `dsh: dropped blank tool arguments for bash: sandbox_permissions, justification`，会话日志中 `tool/call` 计数为 **1**。
+- **注**：与 dsh-desktop 的修法同源（其 `@deepseek-ai+dsh-llm-pi-ai` 补丁），但那边的 `dsh-llm-pi-ai` 来自 npm，可直接用 `patchedDependencies` 打 `lib/index.js`；**本仓库该包是 workspace 源码包，`patchedDependencies` 对 workspace 包不生效，必须直接改源码。**
+
+### 坑 11：模型名带了过期日期
+
+- **现象**：界面显示 `deepseek-v4.1-flash-expires-on-0910`——名字里就写着 09-10 过期。
+- **根因**：`settings.yaml` 里 `id` 是**发给网关的底层模型名**、`name` 才是**界面展示名**。旧配置把过期代号填进了 `id`（这个错误是从 dsh-desktop 的模板里继承来的）。
+- **修复**：`id: deepseek-v4-flash`（底层真名）＋ `name: DeepSeek V4.1 Flash`（展示名），`agent-default-model.model` 同步改为 `deepseek-v4-flash`。网关实测两个名字**当前都返回 200**，但过期名随时失效，不要等它挂掉。
+- **教训**：换模型时改 `id`，不要改 `name`；名字里带日期的代号一律视为临时。
+
+## 五、换机恢复清单
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0（`corepack enable --install-directory ~/.local/bin && corepack pnpm -v` 应输出 11.7.0）、Xcode Command Line Tools。
 2. **克隆并构建**：

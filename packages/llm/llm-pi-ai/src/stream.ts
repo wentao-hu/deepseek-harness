@@ -139,6 +139,39 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  * @returns the harness chunks, ending with `usage` then `finish`; throws
  *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event.
  */
+/**
+ * Whether one argument value is an explicit empty the model sent for an unused optional field.
+ *
+ * 二次开发：公司网关会强制给函数工具加 `"strict": true`，而 strict 模式要求每个属性都出现在
+ * `required` 里。于是模型必须为「本次用不到」的可选字段填值——它只能填 `null` 或空串。
+ * 对可选字段而言，显式空值语义上等同于「未提供」。
+ * @param value - one member of the model's parsed tool-call arguments.
+ * @returns whether the member carries no usable value.
+ */
+function isBlankArgument(value: unknown): boolean {
+  return value === null || (typeof value === 'string' && value.trim().length === 0)
+}
+
+/**
+ * Drop blank members from one tool call's model-supplied arguments before they reach validation.
+ *
+ * 不剔除的话，harness 的参数校验会按 schema 拒绝这些值，报
+ * `"sandbox_permissions" must be a string` / `must be one of [...]`，模型只能反复重试同一调用，
+ * 每个 bash 调用白白多花两轮。只处理对象型参数；数组、标量与 `null` 本身原样保留。
+ * 实际剔除时会向 stderr 打一行诊断，便于定位是哪个工具的哪些字段被清理。
+ * @param name - tool name, for the diagnostic line.
+ * @param args - the parsed arguments object pi-ai handed back.
+ * @returns the arguments with blank members removed, or the input unchanged when nothing was blank.
+ */
+function withoutBlankArguments(name: string, args: unknown): unknown {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return args
+  const entries = Object.entries(args as Record<string, unknown>)
+  const dropped = entries.filter(([, value]) => isBlankArgument(value)).map(([key]) => key)
+  if (dropped.length === 0) return args
+  process.stderr.write(`dsh: dropped blank tool arguments for ${name}: ${dropped.join(', ')}\n`)
+  return Object.fromEntries(entries.filter(([, value]) => !isBlankArgument(value)))
+}
+
 export async function* toStreamChunks(
   events: AsyncIterable<AssistantMessageEvent>,
   contextWindow?: number,
@@ -201,7 +234,7 @@ export async function* toStreamChunks(
             name: event.toolCall.name,
             // pi-ai hands back the PARSED arguments; the harness vocabulary
             // keeps the raw string.
-            arguments: JSON.stringify(event.toolCall.arguments),
+            arguments: JSON.stringify(withoutBlankArguments(event.toolCall.name, event.toolCall.arguments)),
           },
         }
         break
