@@ -146,13 +146,20 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  */
 /**
  * 二次开发：模型替「本次用不到」的可选字段填的占位词。网关 strict 化后它无法省略字段，
- * 而提权字段的枚举里没有空值可填，于是「不适用」以这些词的形式到达。
+ * 于是「不适用」以这些词的形式到达理由字段。
  */
 const PLACEHOLDER_ARGUMENTS: readonly string[] = ['null', 'none', 'nil', 'undefined']
 
 /**
+ * 二次开发：沙箱提权的合法目标，与 `@deepseek-ai/dsh-sandbox` 的 `ESCALATION_TARGETS` 一致。
+ * 合法空间封闭，而模型能编的词不封闭——所以提权目标只认白名单，枚举外的一律算「未提供」。
+ * 起初用占位词黑名单，09-12 模型改填 `"require"` 就绕过了。
+ */
+const ESCALATION_TARGETS: readonly string[] = ['workspace-write', 'danger-full-access']
+
+/**
  * 二次开发：沙箱提权字段（`@deepseek-ai/dsh-tool-bash`、`@deepseek-ai/dsh-tool-fs`
- * 与 pwsh 同族），它们的枚举只有提权目标，占位词只会出现在这里。
+ * 与 pwsh 同族）。两者必须成对出现，所以清空目标时理由要一起清。
  */
 const ESCALATION_ARGUMENTS: readonly string[] = ['sandbox_permissions', 'justification']
 
@@ -161,10 +168,10 @@ const ESCALATION_ARGUMENTS: readonly string[] = ['sandbox_permissions', 'justifi
  *
  * 二次开发：公司网关会强制给函数工具加 `"strict": true`，而 strict 模式要求每个属性都出现在
  * `required` 里。于是模型必须为「本次用不到」的可选字段填值——它只能填 `null`、空串，
- * 或在枚举受限时填 `"null"` 这类占位词。对可选字段而言，显式空值语义上等同于「未提供」。
- * 占位词只对提权字段生效：别的字段上 `"null"` 可能是有意义的内容（例如 `edit` 要替换
+ * 或在枚举受限时自己编一个词（`"null"`、`"require"`…）。对可选字段而言，这类值等同于「未提供」。
+ * 判定只对提权字段收紧：别的字段上 `"null"` 可能是有意义的内容（例如 `edit` 要替换
  * 的字面量 `null`）。
- * @param key - the argument name, which decides whether a placeholder word counts as empty.
+ * @param key - the argument name, which decides whether a bogus word counts as empty.
  * @param value - one member of the model's parsed tool-call arguments.
  * @returns whether the member carries no usable value.
  */
@@ -173,6 +180,8 @@ function isBlankArgument(key: string, value: unknown): boolean {
   if (typeof value !== 'string') return false
   const text = value.trim()
   if (text.length === 0) return true
+  // 提权目标只认白名单：枚举外的任何词都是模型为「用不到」编的，不该进校验器
+  if (key === 'sandbox_permissions') return !ESCALATION_TARGETS.includes(text)
   return ESCALATION_ARGUMENTS.includes(key) && PLACEHOLDER_ARGUMENTS.includes(text.toLowerCase())
 }
 
@@ -189,11 +198,18 @@ function isBlankArgument(key: string, value: unknown): boolean {
  */
 function withoutBlankArguments(name: string, args: unknown): unknown {
   if (args === null || typeof args !== 'object' || Array.isArray(args)) return args
-  const entries = Object.entries(args as Record<string, unknown>)
-  const dropped = entries.filter(([key, value]) => isBlankArgument(key, value)).map(([key]) => key)
+  const record = args as Record<string, unknown>
+  // 提权目标被判空时，配对的 justification 必须一起丢：校验器要求两者同时出现
+  // （`validateEscalationArgs`），留下孤立的理由只是换一个报错。
+  const escalationCleared = 'sandbox_permissions' in record
+    && isBlankArgument('sandbox_permissions', record['sandbox_permissions'])
+  const isDropped = ([key, value]: [string, unknown]): boolean =>
+    isBlankArgument(key, value) || (escalationCleared && key === 'justification')
+  const entries = Object.entries(record)
+  const dropped = entries.filter(isDropped).map(([key]) => key)
   if (dropped.length === 0) return args
   process.stderr.write(`dsh: dropped blank tool arguments for ${name}: ${dropped.join(', ')}\n`)
-  return Object.fromEntries(entries.filter(([key, value]) => !isBlankArgument(key, value)))
+  return Object.fromEntries(entries.filter(entry => !isDropped(entry)))
 }
 
 export async function* toStreamChunks(

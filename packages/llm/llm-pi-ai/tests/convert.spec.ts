@@ -850,6 +850,55 @@ describe('toStreamChunks', () => {
     })
   })
 
+  it('drops an invented escalation target together with its justification', async () => {
+    const chunks = await collect(toStreamChunks(feed(
+      {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-4',
+          name: 'bash',
+          arguments: { command: 'ls', description: 'list', sandbox_permissions: 'require', justification: 'the task needs it' },
+        },
+        partial: partialWithToolCall,
+      },
+      { type: 'done', reason: 'toolUse', message: assistant({ content: partialWithToolCall.content, stopReason: 'toolUse' }) },
+    )))
+    expect(chunks[0]).toEqual({
+      type: 'block-end',
+      index: 0,
+      block: { type: 'tool-call', id: 'call-4', name: 'bash', arguments: '{"command":"ls","description":"list"}' },
+    })
+  })
+
+  it('keeps a valid escalation target and the justification paired with it', async () => {
+    const chunks = await collect(toStreamChunks(feed(
+      {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-5',
+          name: 'bash',
+          arguments: { command: 'ls', description: 'list', sandbox_permissions: 'workspace-write', justification: 'the sandbox denied it' },
+        },
+        partial: partialWithToolCall,
+      },
+      { type: 'done', reason: 'toolUse', message: assistant({ content: partialWithToolCall.content, stopReason: 'toolUse' }) },
+    )))
+    expect(chunks[0]).toEqual({
+      type: 'block-end',
+      index: 0,
+      block: {
+        type: 'tool-call',
+        id: 'call-5',
+        name: 'bash',
+        arguments: '{"command":"ls","description":"list","sandbox_permissions":"workspace-write","justification":"the sandbox denied it"}',
+      },
+    })
+  })
+
   it('tolerates toolcall_start with a missing partial entry', async () => {
     const chunks = await collect(toStreamChunks(feed(
       { type: 'toolcall_start', contentIndex: 0, partial: assistant() },

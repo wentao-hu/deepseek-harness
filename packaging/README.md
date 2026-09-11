@@ -95,7 +95,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 |---|---|
 | `patches/@earendil-works__pi-ai@0.85.1.patch` | **新增**：openai-responses 路由透传服务端原生工具，并剔除同名 function 工具 |
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
-| `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的占位词（`null`/`none`/`nil`/`undefined`）。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
+| `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的空值——提权目标按**白名单**判定（只认 `workspace-write`/`danger-full-access`），枚举外的编造词连同配对的 `justification` 一起丢。起初是占位词黑名单（`null`/`none`/`nil`/`undefined`），09-12 模型改填 `"require"` 即绕过。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 13）：`classifyPiAiError` 把配额判定提到 401/403 之前，并把 403 从 `AUTH` 拆成独立的 `FORBIDDEN`——公司网关把配额耗尽也渲染成 403，先判状态码会把配额问题误报成 key 失效 |
 | `packages/sandbox/sandbox/src/escalation.ts`、`packages/sandbox/sandbox/tests/escalation.spec.ts`、`packages/shell/tool-bash/tests/tools.spec.ts`、`packages/shell/tool-pwsh/tests/tools.spec.ts` | **新增**（坑 14）：`approveEscalation` 在请求模式**等于**当前模式时直接放行，不再抛 `not strictly wider`。同族两个测试文件把「相等即报错」的用例换成真正的更窄场景 |
 | `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
@@ -190,6 +190,8 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **根因（已坐实，不是推测）**：公司网关会强制给函数工具加 `"strict": true`。OpenAI strict 模式要求**每个属性都出现在 `required` 里**，于是模型必须为「本次用不到」的可选字段填值，无值可填时只能填 `null` 或空串。而 `packages/shell/tool-bash/src/index.ts:244-269` 只把 `command`/`description` 标为必填，`sandbox_permissions`/`justification` 本就是可选的——校验器（`packages/core/tools/src/schema.ts:478` → `json-schema.ts:607`）按 schema 拒绝 `null` 与非枚举值。**即工具定义没错，是网关的 strict 改写与校验器之间的缝隙。**
 - **修复**：在 `packages/llm/llm-pi-ai/src/stream.ts` 的 `toolcall_end` 分支——参数进入校验的**最后一道关口**——把对象型参数里的 `null` 与纯空白字符串剔除；只处理对象，数组、标量原样保留，实际剔除时向 stderr 打一行诊断。
 - **验证**：改前模型执行 `date` 失败 3 次；改后**第 1 次即成功**，stderr 出现 `dsh: dropped blank tool arguments for bash: sandbox_permissions, justification`，会话日志中 `tool/call` 计数为 **1**。
+- **复发（09-12，已改白名单）**：初版只列了占位词黑名单（`null`/`none`/`nil`/`undefined`），模型改填 `"require"` 就绕过了，同一会话连报两次。**黑名单追不上模型编词的脚步，提权目标已改成白名单**：`sandbox_permissions` 只认 `workspace-write`/`danger-full-access`，枚举外的一律连配对的 `justification` 一起丢——校验器要求两者同时出现（`validateEscalationArgs`），只丢目标会留下孤立的理由、换个报错。
+- **取值实测**：61 个会话的 `session.v3.jsonl.zstd` 逐帧解压后按 `tool/result` 精确定位，得 `"null"` 47 次（09-11 11:35~11:45，初版修复前）、`""` 4 次、`null` 2 次、`"require"` 2 次（09-12 03:20:32，初版修复后）。**注意** `zstdDecompressSync` 只解第一帧，而这些日志是多帧追加的——用它检索会得到「零命中」的假阴性，必须逐帧解压。
 - **注**：与 dsh-desktop 的修法同源（其 `@deepseek-ai+dsh-llm-pi-ai` 补丁），但那边的 `dsh-llm-pi-ai` 来自 npm，可直接用 `patchedDependencies` 打 `lib/index.js`；**本仓库该包是 workspace 源码包，`patchedDependencies` 对 workspace 包不生效，必须直接改源码。**
 
 ### 坑 11：模型名带了过期日期
@@ -402,6 +404,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 | 桌面完成通知 | 窗口失焦时跑完一回合，弹「第 N 回合已完成」 |
 | 服务端原生搜索 | app 里问「今天的一条科技新闻」，能给出当日真实新闻 |
 | 沙箱提权放行 | 模型把提权字段填成当前模式时不再报 `not strictly wider` |
+| 提权占位词剔除（坑 10） | 让模型跑任意 bash 命令，stderr 出现 `dsh: dropped blank tool arguments for bash: sandbox_permissions, …`，且该命令在会话日志里 `tool/call` 只计 1 次（不是 2~3 次重试） |
 | 403 错误分类 | 网关返 403 时显示 `FORBIDDEN` 而非 `AUTH` |
 | **本规则文件** | 本文件存在。它被上游 `.gitignore` 排除、不进 git，需按 `packaging/README.md` 第八节全文重建 |
 
