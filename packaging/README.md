@@ -101,6 +101,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
 | `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns` 的生成脚本；接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
+| `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
 
 ## 四、踩坑记录
