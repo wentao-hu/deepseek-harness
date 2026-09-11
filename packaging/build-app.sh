@@ -40,21 +40,21 @@ export DSH_DESKTOP_NPM_REGISTRY="${DSH_DESKTOP_NPM_REGISTRY:-https://registry.np
 APP_OUT="$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/artifacts/mac-arm64/DeepSeek Harness.app"
 INSTALLED_APP="/Applications/DeepSeek Harness.app"
 
-echo "==> [1/4] 准备运行时（构建 + 组装 + 打补丁 + 哈希清单）"
+echo "==> [1/5] 准备运行时（构建 + 组装 + 打补丁 + 哈希清单）"
 cd "$REPO_ROOT"
 pnpm run prepare:desktop
 
-echo "==> [2/4] electron-builder 打包（未签名）"
+echo "==> [2/5] electron-builder 打包（未签名）"
 cd "$REPO_ROOT/apps/desktop"
 pnpm exec electron-builder \
   --config "$REPO_ROOT/packaging/electron-builder.unsigned.config.mjs" \
   --mac --arm64 --dir --publish never
 
-echo "==> [3/4] 安装到 /Applications"
+echo "==> [3/5] 安装到 /Applications"
 rm -rf "$INSTALLED_APP"
 cp -R "$APP_OUT" "$INSTALLED_APP"
 
-echo "==> [4/4] ad-hoc 签名（必须在最终位置就地进行）"
+echo "==> [4/5] ad-hoc 签名（必须在最终位置就地进行）"
 # 只签最外层 bundle：它会重建 _CodeSignature 并对资源「计算」哈希，不修改文件内容。
 # 绝不加 --deep —— 那会重签 Resources/dsh 下的原生文件、改变其字节，
 # 使 desktop-runtime.json 记录的哈希与实际不符，启动时的运行时校验会判定资源被篡改。
@@ -64,6 +64,9 @@ echo "==> [4/4] ad-hoc 签名（必须在最终位置就地进行）"
 # "invalid Info.plist (plist or signature have been modified)"，双击无法启动。
 codesign --force --sign - "$INSTALLED_APP"
 codesign --verify "$INSTALLED_APP"
+
+echo "==> [5/5] 安装桌面通知插件"
+bash "$REPO_ROOT/packaging/install-desktop-notification.sh"
 
 echo
 echo "完成：$INSTALLED_APP"
