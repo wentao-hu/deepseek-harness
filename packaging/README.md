@@ -225,3 +225,32 @@ bash packaging/build-app.sh
 冲突面就是第三节表格里那几处。若上游自行修复了坑 2/4/5，可把对应改动撤掉改回上游版本。
 
 `pi-ai` 版本升级时，`patches/@earendil-works__pi-ai@*.patch` 的文件名带版本号，需按新版本重新生成补丁（`pnpm patch @earendil-works/pi-ai@<新版本>` → 改 `dist/api/openai-responses.js` → `pnpm patch-commit`）；`prepare-dsh.ts` 的传导逻辑按版本号匹配，版本不符会明确跳过并打印提示，不会把补丁打到错误实现上。
+
+## 七、上游自动追踪（每周一）
+
+`/Users/steven/Library/Application Support/dsh-sync/check-upstream.sh` 由 launchd 任务
+`com.steven.dsh-upstream-check` 在**每周一 10:17** 自动执行，检查两个对象：
+
+| 追踪对象 | 检查内容 |
+|---|---|
+| `deepseek-ai/deepseek-harness` | 自上次记录以来的新提交、上游 `package.json` 版本、你的 fork 落后多少 |
+| `@deepseek-harness-tui/dsh-tui` | npm 最新版 与本机已装版本 的差异 |
+
+**行为**：有更新时把报告写到桌面 `DSH上游追踪-YYYYMMDD.md` 并弹系统通知；**无更新时静默退出**，不产生任何打扰。全程走 GitHub API 与 npm registry，不依赖本地仓库状态。
+
+**为什么不追踪 `dataelement/dsh-desktop` 了**：二次开发已从「包装第三方桌面壳」改为「直接包装官方仓库」，它不再是直接上游；按「只追踪直接上游，底层上游由直接上游传导」的原则移出追踪范围。
+
+**为什么脚本放在 Library 而不是项目或桌面**：macOS 的 TCC 禁止 launchd **读取** `~/Desktop`，脚本不能放桌面、也不能操作桌面的 git 仓库；而报告写到桌面是允许的（写入不受限）。
+
+```bash
+# 手动检查（无变化则静默）
+bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh
+# 强制出报告，用于验证链路
+bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force
+```
+
+**换机后重建**：把 `check-upstream.sh` 放回同一路径并 `chmod +x`；把
+`com.steven.dsh-upstream-check.plist` 放进 `~/Library/LaunchAgents/` 后
+`launchctl load -w` 它；首次运行只记基线、不发通知。
+
+⚠️ **写这个脚本时的坑**：`$变量` 后面紧跟中文标点时必须写成 `${变量}`。实测 `${SUB:+$SUB；}` 会让 bash 把全角分号并进变量名，报 `unbound variable: SUB；` 并让整个任务以非零码退出。
