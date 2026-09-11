@@ -111,6 +111,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
 | `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本** |
 | `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**零上游文件改动** |
+| `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换 |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
 
@@ -270,6 +271,21 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   - **判据用文件时间戳**（`find -newer`）而非 `git status`：时间戳能同时覆盖「改了没提交」和「提交了没重建」两种漏判。任何源文件比 tarball 新、lockfile 更新、或 tarball 不存在，都退回全量；强制全量：`DSH_FORCE_FULL_BUILD=1`。
   - **没有改任何上游脚本**——判断逻辑全在 `build-app.sh` 里。
 - **⚠️ 验证打包改动时的一个陷阱**：**打包流程本身是非确定性的**——同样源码连续跑两次全量，产物会有 **192 个 `package.json` 哈希不同**（元数据差异，不影响运行；两次全量之间也一样）。所以**不要拿「与历史基准字节比对」当判据**，那会得出假阳性（为此刻意白跑过两轮全量）。正确做法：把「待验证产物」与「刚跑完的一次全量产物」直接对比。
+
+### 坑 18：在 DSH 里 commit / push 本仓库，git hook 会「假失败」
+
+- **现象**：`git commit` 报 `node_modules/.bin/tsx: line 41: exec: node: not found`；给 PATH 补上 node 之后，`git push` 又报 `tsdown: Failed to import module "unrun". Please ensure it is installed.`。两条看起来都像代码或依赖坏了，**实际都不是**。
+- **根因（实测）**：DSH 的 bash 工具给的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，既没有 `/opt/homebrew/bin` 也没有 `/usr/local/bin`；而这两个目录**都有 node 且版本不同**——`/usr/local/bin/node` 是 v22.14.0（低于本项目要求的 `^22.19 || >=24`），`/opt/homebrew/bin/node` 是 v25.9.0。用了旧 node，tsdown 就会走 `unrun` 分支（`unrun` 在 tsdown 的 `package.json` 里标着 `"optional": true`，本项目并未安装），于是报模块缺失。
+- **解法**：跑本仓库的 git 命令前先执行下面两行。第二行是因为项目没装 pnpm，而 hook 里写的是裸 `pnpm`（`package.json` 指定 `pnpm@11.7.0`，corepack 在 `/usr/local/bin`）：
+
+  ```bash
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"   # 顺序不能反：/usr/local/bin 在前会用到旧 node
+  mkdir -p /tmp/pnpm-shim && printf '#!/bin/sh\nexec corepack pnpm "$@"\n' > /tmp/pnpm-shim/pnpm && chmod +x /tmp/pnpm-shim/pnpm && export PATH="/tmp/pnpm-shim:$PATH"
+  ```
+
+- **验证**：`node --version` 应输出 v25.9.0；PATH 配好后 pre-push 的 `typecheck` 实测 **7.19 秒通过**，push 正常完成。
+- **⚠️ 不要用 `git push --no-verify` 绕过**：门禁本身没问题，只是环境没配对；跳过等于放弃 typecheck 这道上游质量检查。
+- **另注**：`check-upstream.sh` 第 35 行自带 `export PATH="/opt/homebrew/bin:/usr/local/bin:..."`，所以每周一的上游追踪任务**不受此坑影响**。
 
 ## 五、换机恢复清单
 
