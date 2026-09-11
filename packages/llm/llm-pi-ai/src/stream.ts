@@ -40,8 +40,13 @@ export function mapUsage(usage: PiUsage): TokenUsage {
 // If pi-ai ever forwards the original Error (or a fetch/dispatcher hook that lets
 // us capture the cause ourselves), classify on `code`/`cause` instead of text.
 function classifyPiAiError(message: string): string {
-  if (/\b(?:401|403)\b/.test(message)) return 'AUTH'
+  // 二次开发：配额判定提到状态码之前——公司网关把配额耗尽也渲染成 403，
+  // 先判 401/403 会把「配额用完」误报成「key 失效」。
   if (isQuotaExceededError(message)) return QUOTA_EXCEEDED_CODE
+  if (/\b401\b/.test(message)) return 'AUTH'
+  // 二次开发：403 是「已认证但无权访问」，与 401 的「认证失败」是两类问题，
+  // 分开归类才能让网关的权限报错不被读成 key 失效。
+  if (/\b403\b/.test(message)) return 'FORBIDDEN'
   if (/\b429\b|rate.?limit/i.test(message)) return 'RATE_LIMIT'
   // A rejected request body (gateway or provider size cap): resending the
   // same request cannot succeed, so it is invalid, not transient.

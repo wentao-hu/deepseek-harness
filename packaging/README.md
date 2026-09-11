@@ -60,6 +60,8 @@ ln -sf "$(pwd)/packaging/dsh-tui" ~/.local/bin/dsh-tui
 
 双击 `/Applications/DeepSeek Harness.app` 即可。首次启动会在 `$DSH_HOME`（默认 `~/.dsh`）下生成 `profiles/desktop`，并与 CLI 共用同一份 `settings.yaml` 与 `.env`。
 
+**完成通知**：任务跑完且窗口不在前台时弹 macOS 原生通知（标题为会话标题，正文形如「第 3 回合已完成」）。由 `packaging/desktop-notification/` 插件提供，`build-app.sh` 打包后自动装入 profile —— 首次加载会弹一条「通知已启用」确认，macOS 正是靠这次成功发送把应用登记进「系统设置 → 通知」（见坑 12）。
+
 ⚠️ **不要从已注入 `DSH_HOME` 的终端里直接运行它的可执行文件**（见坑 6）。从 Finder/Dock 启动不受影响。
 
 ### 重新打包（一条命令）
@@ -94,13 +96,17 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `patches/@earendil-works__pi-ai@0.85.1.patch` | **新增**：openai-responses 路由透传服务端原生工具，并剔除同名 function 工具 |
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的占位词（`null`/`none`/`nil`/`undefined`）。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
+| `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 13）：`classifyPiAiError` 把配额判定提到 401/403 之前，并把 403 从 `AUTH` 拆成独立的 `FORBIDDEN`——公司网关把配额耗尽也渲染成 403，先判状态码会把配额问题误报成 key 失效 |
+| `packages/sandbox/sandbox/src/escalation.ts`、`packages/sandbox/sandbox/tests/escalation.spec.ts`、`packages/shell/tool-bash/tests/tools.spec.ts`、`packages/shell/tool-pwsh/tests/tools.spec.ts` | **新增**（坑 14）：`approveEscalation` 在请求模式**等于**当前模式时直接放行，不再抛 `not strictly wider`。同族两个测试文件把「相等即报错」的用例换成真正的更窄场景 |
 | `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
 | `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
 | `apps/desktop/electron-builder.config.mjs` | **3 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标） |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 View 菜单**：绑定系统缩放 role（`resetZoom`/`zoomIn`/`zoomOut`）。上游用自定义菜单整体替换了 Electron 默认菜单却未补 View 菜单，导致 `Cmd +/-/0` 完全无响应。菜单文案走 locale 字典 |
+| `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 Edit 菜单**：绑定系统剪贴板 role（`undo`/`redo`/`cut`/`copy`/`paste`/`selectAll`）。与上面 View 菜单同一根因——上游自定义菜单整体替换了默认菜单却未补 Edit 菜单，macOS 上 `Cmd+C/V/X/A/Z` 因此全部无响应。菜单文案走 locale 字典 |
 | `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
 | `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns` 的生成脚本；接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
+| `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**零上游文件改动** |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
 
@@ -188,6 +194,39 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **修复**：`id: deepseek-v4-flash`（底层真名）＋ `name: DeepSeek V4.1 Flash`（展示名），`agent-default-model.model` 同步改为 `deepseek-v4-flash`。网关实测两个名字**当前都返回 200**，但过期名随时失效，不要等它挂掉。
 - **教训**：换模型时改 `id`，不要改 `name`；名字里带日期的代号一律视为临时。
 
+### 坑 12：桌面端不弹通知，系统设置里也找不到这个应用
+
+- **现象**：插件装好、app 重启过，但「系统设置 → 通知」列表里根本没有 `DeepSeek Harness`。
+- **根因（两条叠加）**：
+  1. **macOS 只在应用第一次成功发出通知之后，才把它登记进通知列表**。没成功发过，设置里就不会有这一项 —— 这不是权限被拒，而是压根还没注册。
+  2. 插件按设计**只在窗口失焦时**才提醒（正看着窗口就不打扰），于是「盯着窗口等结果」这种最常见的用法，永远触发不了那个第一次。
+- **取证方式**（系统层，不必读代码）：
+  ```bash
+  # 通知库里有没有登记（无输出＝没登记）
+  defaults read com.apple.ncprefs apps | grep -i sankuai
+  # LaunchServices 是否认可它有通知能力（出现 NOTIFICATION#: 即认可）
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | grep -A2 com.sankuai.dsh
+  ```
+  实测结论：LaunchServices 有 `NOTIFICATION#:com.sankuai.dsh`，而通知库里没有它 —— 即「系统认可该应用能发通知，但它一次都没发过」。
+- **修复**：插件首次加载时主动弹一条「DeepSeek Harness 通知已启用」确认；只有确认真的显示过才用 `localStorage` 记账，否则下次启动重试。重启一次即可在设置里看到本应用，且不会反复打扰。
+
+### 坑 13：403 一律被读成「认证失败」
+
+- **现象**（在 dsh-desktop 上观察到）：网关返回 403 时错误码一律是 `AUTH`，读起来像 API key 失效。
+- **根因**：`packages/llm/llm-pi-ai/src/stream.ts` 的 `classifyPiAiError` 用 `/\b(?:401|403)\b/` 一条正则同时匹配 401 与 403，都返回 `AUTH`；而 403 是「已认证但无权访问」，与 401 的「认证失败」是两类问题。
+- **修复**：配额判定（`isQuotaExceededError`）提到状态码之前，401 仍归 `AUTH`，403 拆成独立的 `FORBIDDEN`。
+- **验证**：`convert.spec.ts` 新增两条断言（`HTTP 403: Forbidden` → `FORBIDDEN`、`HTTP 403: insufficient_quota` → `QUOTA`），与原有 95 项合跑全通过；`pnpm run typecheck` 退出码 0。**尚未在真实网关上验过 403 场景。**
+- **注**：`FORBIDDEN` 是 0.1.5-rc.2 里没有的新错误码——界面直接展示码文本，默认重试列表不含它（与 `AUTH` 同样不重试）。来源是 dsh-desktop 的 `@deepseek-ai+dsh-llm-pi-ai` 补丁。
+
+### 坑 14：预设模式与模型请求的模式相同时报 `not strictly wider`
+
+- **现象**（在 dsh-desktop 上观察到）：模型带着 `sandbox_permissions` 调用 bash，返回 `sandbox escalation to "workspace-write" is not strictly wider than this call's current "workspace-write" mode`，命令没有执行。
+- **根因**：`packages/sandbox/sandbox/src/escalation.ts` 的 `approveEscalation` 只认「严格变宽」——`WIDER_MODES[effectiveMode]` 不含 `effectiveMode` 自身，请求与当前模式相等时被判为非法。
+- **修复**：`mode === effectiveMode` 时直接返回 `effectiveMode`，权限边界不变，也不再抛错。
+- **验证**：`escalation.spec.ts` 新增「相等即放行、不询问用户」用例；`tool-bash` / `tool-pwsh` 的用例改用真正的更窄场景（`danger-full-access` 预设请求 `workspace-write`），三个文件合跑 146 项全通过；`pnpm run typecheck` 退出码 0。**尚未在真实会话里验过模型触发路径。**
+- **注**：与 `docs/换机恢复指南.md` 里「报 `not strictly wider` → 权限预设是最高档 `danger-full-access`」是同一报错的两个来源——那条修的是预设过高，本条修的是预设与模型请求相等。来源是 dsh-desktop 的 `@deepseek-ai+dsh-sandbox` 补丁。
+- **顺带排除的怀疑**：本机 app 是 ad-hoc 签名（`codesign --force --sign -`，必要性见 build-app.sh 注释），实测**不影响通知发送**；被 macOS 拒绝的是完全未签名的二进制。
+
 ## 五、换机恢复清单
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0（`corepack enable --install-directory ~/.local/bin && corepack pnpm -v` 应输出 11.7.0）、Xcode Command Line Tools。
@@ -196,6 +235,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    git clone <你的 fork> ~/MyApps/deepseek-harness && cd ~/MyApps/deepseek-harness
    pnpm install && pnpm run build:official
    ```
+   重建 `CLAUDE.local.md`（二开规则，被 `.gitignore` 排除故不进仓库）：按第八节全文 `cat > CLAUDE.local.md` 粘贴。
 3. **装 CLI 启动器**：`ln -sf "$PWD/packaging/dsh" ~/.local/bin/dsh && dsh --version`
 4. **恢复 `~/.dsh` 配置**（独立私有仓库 `git@github.com:wentao-hu/.dsh.git`，含密钥，已同步）：
    ```bash
@@ -224,6 +264,9 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    codesign --verify "/Applications/DeepSeek Harness.app" && echo 签名有效
    ```
    最后双击应用发一句「搜索并总结今天的一条主要科技新闻」——能给出当日真实新闻，即代表服务端搜索生效。
+
+   通知链路：首次启动应弹一条「DeepSeek Harness 通知已启用」；切到别的应用后发一条消息，跑完应弹「第 N 回合已完成」。此时「系统设置 → 通知」里能看到本应用。
+   profile 由应用首次启动时生成，插件装不进去时隔一层排查：`bash packaging/install-desktop-notification.sh`（幂等，可随时重跑）。
 
 ## 六、跟随上游更新
 
@@ -265,3 +308,28 @@ bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force
 `launchctl load -w` 它；首次运行只记基线、不发通知。
 
 ⚠️ **写这个脚本时的坑**：`$变量` 后面紧跟中文标点时必须写成 `${变量}`。实测 `${SUB:+$SUB；}` 会让 bash 把全角分号并进变量名，报 `unbound variable: SUB；` 并让整个任务以非零码退出。
+
+## 八、二开规则（`CLAUDE.local.md`）
+
+仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，约束「做功能改动时不让上游追踪链路受影响」。它**被上游 `.gitignore` 第 1 行排除，不进 git**——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
+
+````markdown
+# 本项目二开规则
+
+## 同步上游优先（改任何功能前先读）
+
+本仓库是 `deepseek-ai/deepseek-harness` 的 fork，**与上游保持可同步是第一约束**。每周一由 launchd 任务 `com.steven.dsh-upstream-check` 执行 `~/Library/Application Support/dsh-sync/check-upstream.sh`，追踪上游新提交与本 fork 落后多少。做功能改动时，按下述规则保护这条链路：
+
+1. **改动收敛**：能放 `packaging/`（本 fork 专属区）就不动上游源码；必须改上游源码时，改动点写进 `packaging/README.md` 第三节「改动清单」——那是跟随上游 `git merge upstream/master` 时唯一的冲突面清单，漏登记等于下次合并时丢改动。
+2. **不碰上游门禁与规则文件**：`.github/workflows/`、根 `scripts/`、`AGENTS.md` 及 `CLAUDE.md` 符号链接（含 `packages/AGENTS.md`、`packages/CLAUDE.md`）。二开规则写在本文件（`CLAUDE.local.md`，上游 `.gitignore` 已排除），不要写进 `AGENTS.md`。
+3. **不动历史与 remote**：不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——追踪脚本靠它们算落后量，重写历史会让报告失真。
+4. **改完自检**：`git remote -v` 两个 remote 仍正确；`bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force` 能正常出报告即为链路完好（脚本走 GitHub API，不依赖本地工作区状态，本地改动本身不会让它失灵——会失灵的是上面第 2、3 条）。
+
+## 二开产物位置
+
+- 打包与启动器：`packaging/`（`README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
+- 桌面端改动：`apps/desktop/`（改这里要登记，见规则 1）
+- 桌面通知插件：`packaging/desktop-notification/`（零上游文件改动）
+````
+
+**为什么放 `CLAUDE.local.md` 而不是 `AGENTS.md`**：`AGENTS.md` 是上游文件（根 `CLAUDE.md` 与 `packages/CLAUDE.md` 都是它的符号链接），往里写规则会扩大跟随上游 `git merge` 的冲突面，与规则本身要保护的目标相悖。
