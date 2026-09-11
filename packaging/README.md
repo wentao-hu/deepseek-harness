@@ -356,7 +356,8 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 | 二开功能 | 怎么验 |
 |---|---|
 | CLI 启动器 | `dsh --version` 输出 `0.1.5-rc.2` |
-| Edit / View 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应（上游自定义菜单漏了这两组，是本 fork 补的） |
+| Edit / View / File / Window 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应，`Cmd+W` 能关窗、`Cmd+M` 能最小化（上游自定义菜单把 View / Edit / File / Window 四组 role 全漏了，是本 fork 补的） |
+| 标题栏 | 白色底、无文字（只剩红黄绿按钮）——即使在深色系统下也应是白的（`nativeTheme.themeSource = 'light'`） |
 | 应用图标 | Dock 里不是 Electron 默认图标 |
 | 桌面完成通知 | 窗口失焦时跑完一回合，弹「第 N 回合已完成」 |
 | 服务端原生搜索 | app 里问「今天的一条科技新闻」，能给出当日真实新闻 |
