@@ -93,6 +93,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 |---|---|
 | `patches/@earendil-works__pi-ai@0.85.1.patch` | **新增**：openai-responses 路由透传服务端原生工具，并剔除同名 function 工具 |
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
+| `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的占位词（`null`/`none`/`nil`/`undefined`）。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
 | `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
 | `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
 | `apps/desktop/electron-builder.config.mjs` | **3 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标） |
@@ -195,11 +196,19 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    pnpm install && pnpm run build:official
    ```
 3. **装 CLI 启动器**：`ln -sf "$PWD/packaging/dsh" ~/.local/bin/dsh && dsh --version`
-4. **写配置**（这两份不在仓库里，含密钥）：
+4. **恢复 `~/.dsh` 配置**（独立私有仓库 `git@github.com:wentao-hu/.dsh.git`，含密钥，已同步）：
+   ```bash
+   git clone git@github.com:wentao-hu/.dsh.git ~/.dsh   # ~/.dsh 已存在时照该仓库 README 的「情形 B」处理，勿整目录覆盖
+   bash ~/.dsh/machine/install.sh   # 一并恢复 ~/.zshrc 的 DSH 段与每周一上游追踪任务
+   ```
+   仓库内含 `settings.yaml`、`.env`、`.agent-presets/liangshen/`、`machine/`；排除项（`.credentials.yaml`、`profiles/`、`sessions/`、`storages/`）及原因见该仓库 README。配置要点：
    - `~/.dsh/settings.yaml`：`llm-pi-ai.providers.sankuai`（`api: openai-responses`、`baseURL: https://aigc.sankuai.com/agentic/v1`、`apiKeyEnv: SANKUAI_API_KEY`、`contextWindow: 1000000`、`maxTokens: 393216`、`input: [text, image]`、`reasoningEfforts` 映射）+ `agent-default-model` 指向该路由
    - `~/.dsh/.env`：`SANKUAI_API_KEY=<AppID>`、`RESPONSES_NATIVE_TOOLS=web_search`
    - ⚠️ 变量名**不能**用 `DSH_` 前缀：app-boot 的 `BOOTSTRAP_PREFIXES` 会拒绝 `.env` 里的 `DSH_*`
    - ⚠️ YAML 里 `"off"` **必须加引号**：YAML 1.1 会把裸 `off` 解析成布尔 false
+   - ⚠️ **`~/.zshrc` 里的 `SANKUAI_API_KEY` 优先于 `.env`**：`process.loadEnvFile` 不覆盖已存在的环境变量（实测）。CLI 从终端启动时用 shell 那个、桌面端从 Finder 启动时用 `.env` 那个，两个 AppID 不同。当前两者都返回 HTTP 200，但换机后若只恢复 `.env`，CLI 会静默换号
+   - ⚠️ **`DSH_RESPONSES_NATIVE_TOOLS`（带前缀）是无效配置**：补丁读的是不带前缀的 `RESPONSES_NATIVE_TOOLS`（`patches/@earendil-works__pi-ai@0.85.1.patch`），只有 `.env` 那一行生效
+   - **技能来源**：`~/.agents/skills`（harness 的 user-agents skill 根）由 `link-skills.sh` 从 `~/.skills-manager`（另一个私有仓库）软链而来，换机需一并 clone 并跑一次 `bash ~/Library/Application\ Support/dsh-sync/link-skills.sh`
 5. **装交互式终端 TUI**（可选，profile 名必须叫 `dsh-tui`）：
    ```bash
    dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
