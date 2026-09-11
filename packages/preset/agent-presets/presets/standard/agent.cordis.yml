@@ -78,14 +78,22 @@
 
 # The skill REGISTRY lives in the host composition and is layered per scope:
 # these rows register into THIS preset's layer of it, so they need no realm.
-# `skill-filesystem` contributes local-root discovery for agents on this preset, and
-# `tool-skill` gives them the catalog and loader; the merged catalog also
-# carries whatever the deployment registered globally (repository plugins).
+# `skill-filesystem` contributes local-root discovery for agents on this preset.
+#
+# LOCAL ADDITION: the `tool-skill` row (`@deepseek-ai/dsh-tool-skill`, which
+# injected the ~9KB `<available_skills>` catalog AND registered a tool literally
+# named `skill`) is replaced by `skill-search`. WHY: while this preset mounted
+# `tool-skill`, the company AIGC gateway (aigc.sankuai.com) appended its own
+# "Skill usage rules" block to every request; the `liangshen` preset mounts this
+# same replacement and was observed NOT to receive that block. Skill capability
+# is preserved through two small on-demand tools instead of the always-on
+# catalog: `skill_search` (list matching summaries) and `skill_load` (inject one
+# skill's instructions for the next request). See skill-search.mjs.
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
 
-- id: tool-skill
-  name: '@deepseek-ai/dsh-tool-skill'
+- id: skill-search
+  name: ./skill-search.mjs
 
 # ── goals ───────────────────────────────────────────────────────────────────
 
