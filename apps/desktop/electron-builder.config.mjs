@@ -106,7 +106,10 @@ export function createElectronBuilderConfig(
       )
     },
     win: {
-      icon: 'assets/icon.png',
+      // Windows 用多尺寸 .ico：由 build:icons 生成（16/24/32/48/64/128/256）。
+      // 给 .png 也能出包（electron-builder 会自己转），但档位不可控，且
+      // 「圆角外透明」必须保留 —— 否则桌面快捷方式会出现白方块包圆角矩形。
+      icon: 'assets/icon.ico',
       forceCodeSigning: !unsigned,
       signtoolOptions: {
         sign: windowsSigner,

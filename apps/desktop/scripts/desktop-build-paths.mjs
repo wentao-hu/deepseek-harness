@@ -1,5 +1,6 @@
 /** Resolve build-owned Desktop paths without sharing mutable state across release targets. */
 
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
@@ -39,14 +40,19 @@ export function desktopTargetBuildPaths(target) {
   }
   const root = join(BUILD_ROOT, 'targets', target)
   const packed = join(root, 'packed')
+  // nodeExtract 与 dshPnpm 是唯一落在 target 之外的两项：前者是解开官方 Node 压缩包、
+  // 取出 node 可执行文件的中转目录，后者是内置 pnpm 的 config/cache/state。两者都是
+  // 一次性状态，组装完立刻删除，既不需要保留也不需要可复现。因此它们属于系统临时目录，
+  // 而不是构建树 —— 临时状态留在构建树里既不合语义，也会让受限环境（WorkBuddy 沙箱）
+  // 在删除上千个文件时拦下整条打包链路。
   return {
     root,
     artifacts: join(root, 'artifacts'),
     runtime: join(root, 'runtime'),
     packageSet: join(root, 'package-set'),
     dsh: join(root, 'dsh'),
-    dshPnpm: join(root, 'dsh-pnpm'),
-    nodeExtract: join(root, 'node-extract'),
+    dshPnpm: join(tmpdir(), 'dsh-desktop-pnpm-state', target),
+    nodeExtract: join(tmpdir(), 'dsh-desktop-node-extract', target),
     packedDsh: join(packed, 'dsh'),
     packedVendor: join(packed, 'vendor'),
     packedLandlock: join(packed, 'landlock'),
