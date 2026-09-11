@@ -247,6 +247,25 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **真正的「秒开」路径**：关窗（`Cmd+W`）而非退出（`Cmd+Q`）——macOS 上关窗不退出进程，后端保持就绪，点 Dock 重开直接跳过整个启动流程（实测秒开）。
 - **顺带修掉的第二条**：标题栏里那行小字原本是**窗口标题**——Electron 默认让它跟随页面的 `document.title`，而 harness 写入的是「当前对话名 — DeepSeek Harness」，于是与界面内的对话标题重复。它一直都在，只是此前标题栏是深灰、字不显眼，**改成白色后才暴露出来**。修法是 `title: ''` + 监听 `page-title-updated` 阻止改写，布局不变。
 
+### 坑 17：打包慢，**别去查网络**（附实测耗时地图）
+
+- **现象**：一次 `bash packaging/build-app.sh` 约 4 分钟。日志里 pnpm 频繁打印 `downloaded 265` 和 `below 50 KiB/s`，看起来像网络瓶颈。
+- **三条排查结论（全部实测，下次别重复走）**：
+  1. **真正走网络的只有 9 个包**——判据是日志里 `below 50 KiB/s` 警告的**条数**（9 条），不是 pnpm 的 `downloaded` 数字；后者把「从本地 store 取包」也算进去了。
+  2. **`npmmirror` 不慢**：实测 320 KB/s，比官方源 npmjs（70 KB/s）**快 4.5 倍**。`build-app.sh` 的默认源已是最优，**换源无效**。
+  3. **构建是增量的**：`build:official` 热态仅 **13 秒**，不是瓶颈。
+- **耗时地图**（`prepare:desktop` 实测 154 秒，加上 electron-builder 共约 4 分钟）：
+
+  | 阶段 | 耗时 | 性质 |
+  |---|---|---|
+  | `release:pack` ×2（275 个 tarball） | **~87 秒** | **最大头**，每次全量重打 |
+  | `prepare:dsh`（组装运行时 + 装依赖） | 48 秒 | 脚本每次 `rmSync` 后重建 |
+  | `build:official` | 13 秒 | 增量，热态很快 |
+  | `prepare:runtime` + `prepare:packages` | 6 秒 | |
+  | electron-builder（含下载 electron zip） | ~1–2 分钟 | |
+
+- **结论：目前没有零风险的加速手段**。唯一可省的是 `release:pack` 那 ~87 秒，但它每次重打 275 个 tarball 是有意设计（运行时靠 tarball 固化），要跳过就得改上游的 `apps/desktop/scripts/package-target.ts` 加缓存判断——冲突面 +1，而且判断失误会打出**过期的包**（源码改了却复用旧 tarball）。**权衡后暂不改**，记录在此备查。
+
 ## 五、换机恢复清单
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0（`corepack enable --install-directory ~/.local/bin && corepack pnpm -v` 应输出 11.7.0）、Xcode Command Line Tools。
@@ -369,6 +388,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 
 1. **改动收敛**：能放 `packaging/`（本 fork 专属区）就不动上游源码；必须改上游源码时，改动点写进 `packaging/README.md` 第三节「改动清单」——那是 `git merge upstream/master` 时唯一的冲突面清单，漏登记等于下次合并时丢改动。
 2. **被忽略但必需的文件**：`packaging/desktop-notification/lib/` 是手写源码（不是构建产物），却被上游 `lib/` 的忽略规则命中，提交时必须 `git add -f`——**不要改上游 `.gitignore`**。
+3. **打包慢先查台账**：`packaging/README.md` 坑 17 有实测耗时地图——**别去查网络**（真正走网络的只有 9 个包，npmmirror 实测比官方源快 4.5 倍），耗时大头是 `release:pack` 每次重打 275 个 tarball（约 87 秒）。这是打包的固定成本，没有零风险的加速手段，别再花时间重新排查。
 
 ## 四、二开产物位置
 
