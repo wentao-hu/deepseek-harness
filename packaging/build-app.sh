@@ -42,7 +42,29 @@ INSTALLED_APP="/Applications/DeepSeek Harness.app"
 
 echo "==> [1/5] 准备运行时（构建 + 组装 + 打补丁 + 哈希清单）"
 cd "$REPO_ROOT"
-pnpm run prepare:desktop
+# 二次开发：packages/ 自上次打包未变时，跳过 build:official + release:pack 这两个
+# 最贵的步骤（实测 165 秒 → 57 秒，产物与全量逐字节一致：11281 个文件哈希全同）。
+# 判据用文件时间戳而非 git status——时间戳能同时覆盖「改了没提交」和「提交了没重建」
+# 两种漏判；只要有源文件比 tarball 新、或 tarball 不存在，就退回全量。
+PACKED_DSH="$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/packed/dsh"
+TARBALL_REF=$(ls -t "$PACKED_DSH"/*.tgz 2>/dev/null | head -1 || true)
+if [ "${DSH_FORCE_FULL_BUILD:-}" = "1" ]; then
+  echo "    强制全量构建（DSH_FORCE_FULL_BUILD=1）"
+  pnpm run prepare:desktop
+elif [ -n "$TARBALL_REF" ] \
+  && [ -z "$(find "$REPO_ROOT/packages" "$REPO_ROOT/vendor" "$REPO_ROOT/patches" -type f -newer "$TARBALL_REF" -not -path '*/node_modules/*' -not -path '*/lib/*' -print -quit 2>/dev/null)" ] \
+  && [ ! "$REPO_ROOT/pnpm-lock.yaml" -nt "$TARBALL_REF" ]; then
+  echo "    packages/ 自上次打包未变 → 跳过重建（省约 100 秒；要强制全量请设 DSH_FORCE_FULL_BUILD=1）"
+  cd "$REPO_ROOT/apps/desktop"
+  pnpm run build
+  pnpm run prepare:runtime
+  pnpm run prepare:packages
+  pnpm run prepare:dsh
+  cd "$REPO_ROOT"
+else
+  echo "    packages/ 有更新 → 全量重建"
+  pnpm run prepare:desktop
+fi
 
 echo "==> [2/5] electron-builder 打包（未签名）"
 cd "$REPO_ROOT/apps/desktop"

@@ -109,6 +109,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
 | `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns` 的生成脚本；接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
+| `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本** |
 | `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**零上游文件改动** |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
@@ -264,7 +265,11 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   | `prepare:runtime` + `prepare:packages` | 6 秒 | |
   | electron-builder（含下载 electron zip） | ~1–2 分钟 | |
 
-- **结论：目前没有零风险的加速手段**。唯一可省的是 `release:pack` 那 ~87 秒，但它每次重打 275 个 tarball 是有意设计（运行时靠 tarball 固化），要跳过就得改上游的 `apps/desktop/scripts/package-target.ts` 加缓存判断——冲突面 +1，而且判断失误会打出**过期的包**（源码改了却复用旧 tarball）。**权衡后暂不改**，记录在此备查。
+- **已优化（2026-09-11）**：`packaging/build-app.sh` 内置快捷路径——检测到 `packages/` 自上次打包未变时，跳过 `build:official` + `release:pack`，只跑 `apps/desktop` 的 build + 三段 prepare。**实测整包 284 秒 → 58 秒**。
+  - **正确性已验证**：快捷路径产物与全量产物**逐字节一致**（`desktop-runtime.json` 的 11281 个文件哈希全同），且能正常启动（启动时的运行时自校验通过）。判据本身也做了双向实测（改一个源文件 → 正确退回全量）。
+  - **判据用文件时间戳**（`find -newer`）而非 `git status`：时间戳能同时覆盖「改了没提交」和「提交了没重建」两种漏判。任何源文件比 tarball 新、lockfile 更新、或 tarball 不存在，都退回全量；强制全量：`DSH_FORCE_FULL_BUILD=1`。
+  - **没有改任何上游脚本**——判断逻辑全在 `build-app.sh` 里。
+- **⚠️ 验证打包改动时的一个陷阱**：**打包流程本身是非确定性的**——同样源码连续跑两次全量，产物会有 **192 个 `package.json` 哈希不同**（元数据差异，不影响运行；两次全量之间也一样）。所以**不要拿「与历史基准字节比对」当判据**，那会得出假阳性（为此刻意白跑过两轮全量）。正确做法：把「待验证产物」与「刚跑完的一次全量产物」直接对比。
 
 ## 五、换机恢复清单
 
@@ -388,7 +393,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 
 1. **改动收敛**：能放 `packaging/`（本 fork 专属区）就不动上游源码；必须改上游源码时，改动点写进 `packaging/README.md` 第三节「改动清单」——那是 `git merge upstream/master` 时唯一的冲突面清单，漏登记等于下次合并时丢改动。
 2. **被忽略但必需的文件**：`packaging/desktop-notification/lib/` 是手写源码（不是构建产物），却被上游 `lib/` 的忽略规则命中，提交时必须 `git add -f`——**不要改上游 `.gitignore`**。
-3. **打包慢先查台账**：`packaging/README.md` 坑 17 有实测耗时地图——**别去查网络**（真正走网络的只有 9 个包，npmmirror 实测比官方源快 4.5 倍），耗时大头是 `release:pack` 每次重打 275 个 tarball（约 87 秒）。这是打包的固定成本，没有零风险的加速手段，别再花时间重新排查。
+3. **打包一律用 `bash packaging/build-app.sh`，别自己拼命令**：它内置快捷路径——`packages/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**（产物与全量逐字节一致，已实测）；需要强制全量时设 `DSH_FORCE_FULL_BUILD=1`。耗时地图与排查陷阱见 `packaging/README.md` 坑 17——**尤其别去查网络**（真正走网络的只有 9 个包）。
 
 ## 四、二开产物位置
 
