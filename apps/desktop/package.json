@@ -8,6 +8,7 @@
   "main": "lib/main.js",
   "scripts": {
     "build": "tsc -b && tsdown",
+    "build:icons": "electron scripts/build-icons.mjs",
     "dev": "tsx scripts/dev.ts",
     "start": "tsx scripts/dev.ts --skip-build",
     "prepare:runtime": "tsx scripts/prepare-runtime.ts",

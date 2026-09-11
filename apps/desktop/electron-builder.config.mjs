@@ -71,6 +71,7 @@ export function createElectronBuilderConfig(
       { from: join(buildPaths.dsh, 'node_modules'), to: 'dsh/node_modules' },
     ],
     mac: {
+      icon: 'assets/icon.icns',
       category: 'public.app-category.developer-tools',
       identity: macOSSigning?.signingIdentity,
       forceCodeSigning: true,
@@ -105,6 +106,7 @@ export function createElectronBuilderConfig(
       )
     },
     win: {
+      icon: 'assets/icon.png',
       forceCodeSigning: !unsigned,
       signtoolOptions: {
         sign: windowsSigner,
@@ -113,6 +115,7 @@ export function createElectronBuilderConfig(
       target: ['nsis'],
     },
     linux: {
+      icon: 'assets/icon.png',
       category: 'Development',
       target: ['AppImage'],
     },
