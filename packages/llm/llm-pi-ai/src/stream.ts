@@ -140,16 +140,35 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event.
  */
 /**
- * Whether one argument value is an explicit empty the model sent for an unused optional field.
+ * 二次开发：模型替「本次用不到」的可选字段填的占位词。网关 strict 化后它无法省略字段，
+ * 而提权字段的枚举里没有空值可填，于是「不适用」以这些词的形式到达。
+ */
+const PLACEHOLDER_ARGUMENTS: readonly string[] = ['null', 'none', 'nil', 'undefined']
+
+/**
+ * 二次开发：沙箱提权字段（`@deepseek-ai/dsh-tool-bash`、`@deepseek-ai/dsh-tool-fs`
+ * 与 pwsh 同族），它们的枚举只有提权目标，占位词只会出现在这里。
+ */
+const ESCALATION_ARGUMENTS: readonly string[] = ['sandbox_permissions', 'justification']
+
+/**
+ * Whether one argument is an explicit empty the model sent for an unused optional field.
  *
  * 二次开发：公司网关会强制给函数工具加 `"strict": true`，而 strict 模式要求每个属性都出现在
- * `required` 里。于是模型必须为「本次用不到」的可选字段填值——它只能填 `null` 或空串。
- * 对可选字段而言，显式空值语义上等同于「未提供」。
+ * `required` 里。于是模型必须为「本次用不到」的可选字段填值——它只能填 `null`、空串，
+ * 或在枚举受限时填 `"null"` 这类占位词。对可选字段而言，显式空值语义上等同于「未提供」。
+ * 占位词只对提权字段生效：别的字段上 `"null"` 可能是有意义的内容（例如 `edit` 要替换
+ * 的字面量 `null`）。
+ * @param key - the argument name, which decides whether a placeholder word counts as empty.
  * @param value - one member of the model's parsed tool-call arguments.
  * @returns whether the member carries no usable value.
  */
-function isBlankArgument(value: unknown): boolean {
-  return value === null || (typeof value === 'string' && value.trim().length === 0)
+function isBlankArgument(key: string, value: unknown): boolean {
+  if (value === null) return true
+  if (typeof value !== 'string') return false
+  const text = value.trim()
+  if (text.length === 0) return true
+  return ESCALATION_ARGUMENTS.includes(key) && PLACEHOLDER_ARGUMENTS.includes(text.toLowerCase())
 }
 
 /**
@@ -166,10 +185,10 @@ function isBlankArgument(value: unknown): boolean {
 function withoutBlankArguments(name: string, args: unknown): unknown {
   if (args === null || typeof args !== 'object' || Array.isArray(args)) return args
   const entries = Object.entries(args as Record<string, unknown>)
-  const dropped = entries.filter(([, value]) => isBlankArgument(value)).map(([key]) => key)
+  const dropped = entries.filter(([key, value]) => isBlankArgument(key, value)).map(([key]) => key)
   if (dropped.length === 0) return args
   process.stderr.write(`dsh: dropped blank tool arguments for ${name}: ${dropped.join(', ')}\n`)
-  return Object.fromEntries(entries.filter(([, value]) => !isBlankArgument(value)))
+  return Object.fromEntries(entries.filter(([key, value]) => !isBlankArgument(key, value)))
 }
 
 export async function* toStreamChunks(

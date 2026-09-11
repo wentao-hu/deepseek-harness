@@ -801,6 +801,55 @@ describe('toStreamChunks', () => {
     ])
   })
 
+  it('drops the placeholder words the model sends for the escalation arguments', async () => {
+    const chunks = await collect(toStreamChunks(feed(
+      {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-2',
+          name: 'bash',
+          arguments: { command: 'ls', description: 'list', sandbox_permissions: 'null', justification: 'None' },
+        },
+        partial: partialWithToolCall,
+      },
+      { type: 'done', reason: 'toolUse', message: assistant({ content: partialWithToolCall.content, stopReason: 'toolUse' }) },
+    )))
+    expect(chunks[0]).toEqual({
+      type: 'block-end',
+      index: 0,
+      block: { type: 'tool-call', id: 'call-2', name: 'bash', arguments: '{"command":"ls","description":"list"}' },
+    })
+  })
+
+  it('keeps a literal "null" the model sends for a non-escalation argument', async () => {
+    const chunks = await collect(toStreamChunks(feed(
+      {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-3',
+          name: 'edit',
+          arguments: { file_path: 'a.ts', old_string: 'null', new_string: 'undefined' },
+        },
+        partial: partialWithToolCall,
+      },
+      { type: 'done', reason: 'toolUse', message: assistant({ content: partialWithToolCall.content, stopReason: 'toolUse' }) },
+    )))
+    expect(chunks[0]).toEqual({
+      type: 'block-end',
+      index: 0,
+      block: {
+        type: 'tool-call',
+        id: 'call-3',
+        name: 'edit',
+        arguments: '{"file_path":"a.ts","old_string":"null","new_string":"undefined"}',
+      },
+    })
+  })
+
   it('tolerates toolcall_start with a missing partial entry', async () => {
     const chunks = await collect(toStreamChunks(feed(
       { type: 'toolcall_start', contentIndex: 0, partial: assistant() },
