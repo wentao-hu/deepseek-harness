@@ -32,6 +32,9 @@ export const inject = ['agents', 'tools', 'skills']
 
 const MAX_RESULTS = 20
 
+/** Characters of each description shown in a search result, after newlines collapse. */
+const MAX_DESCRIPTION = 400
+
 /** Minimal JSON schema compiler for tool parameters (zero dependencies). */
 function toJsonSchema(spec) {
   const properties = {}
@@ -47,8 +50,13 @@ function toJsonSchema(spec) {
 
 /** Register the two on-demand skill tools. */
 export function apply(ctx) {
-  /** Normalize a query into lowercase tokens for simple substring matching. */
-  const tokens = (text) => (text || '').toLowerCase().split(/[^a-z0-9_-]+/).filter(Boolean)
+  /**
+   * Normalize text into lowercase tokens for substring matching. Unicode letters
+   * and digits stay in: the former ASCII-only class dropped every CJK character,
+   * so a Chinese query tokenized to nothing, hit the `wanted.length === 0` branch,
+   * and returned the whole catalog instead of the skills actually asked for.
+   */
+  const tokens = (text) => (text || '').toLowerCase().split(/[^\p{L}\p{N}_-]+/u).filter(Boolean)
 
   ctx.tools.register({
     name: 'skill_search',
@@ -74,10 +82,23 @@ export function apply(ctx) {
           const haystack = tokens(`${skill.name} ${skill.description ?? ''} ${skill.whenToUse ?? ''}`).join(' ')
           return wanted.every((token) => haystack.includes(token))
         })
-        const head = matches.slice(0, MAX_RESULTS)
-        const lines = head.map((skill) => {
-          const desc = (skill.description || '').split('\n')[0]
-          return `- ${skill.name}: ${desc}`
+        // Rank by where the tokens hit: a name hit counts ten times a description
+        // hit, and ties fall back to name order so an unfiltered query stays stable.
+        const ranked = matches
+          .map((skill) => {
+            const name = String(skill.name ?? '').toLowerCase()
+            const below = String(skill.description ?? '').toLowerCase()
+            const score = wanted.filter((token) => name.includes(token)).length * 10
+              + wanted.filter((token) => below.includes(token)).length
+            return { skill, name, score }
+          })
+          .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+        const lines = ranked.slice(0, MAX_RESULTS).map(({ skill }) => {
+          // Collapse the whole description: keeping only its first line hid the
+          // trigger conditions that multiline descriptions write further down.
+          const desc = String(skill.description ?? '').replace(/\s+/g, ' ').trim()
+          const shown = desc.length > MAX_DESCRIPTION ? `${desc.slice(0, MAX_DESCRIPTION)}…` : desc
+          return `- ${skill.name}: ${shown}`
         })
         if (lines.length === 0) return { text: `No skills match "${args.query}". Use skill_search with other keywords.` }
         const extra = matches.length > MAX_RESULTS ? `\n…(${matches.length - MAX_RESULTS} more)` : ''
