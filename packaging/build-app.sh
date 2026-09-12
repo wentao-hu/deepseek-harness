@@ -40,21 +40,23 @@ export DSH_DESKTOP_NPM_REGISTRY="${DSH_DESKTOP_NPM_REGISTRY:-https://registry.np
 APP_OUT="$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/artifacts/mac-arm64/DeepSeek Harness.app"
 INSTALLED_APP="/Applications/DeepSeek Harness.app"
 
-echo "==> [1/5] 准备运行时（构建 + 组装 + 打补丁 + 哈希清单）"
+echo "==> [1/6] 准备运行时（构建 + 组装 + 打补丁 + 哈希清单）"
 cd "$REPO_ROOT"
 # 二次开发：packages/ 自上次打包未变时，跳过 build:official + release:pack 这两个
 # 最贵的步骤（实测 165 秒 → 57 秒，产物与全量逐字节一致：11281 个文件哈希全同）。
 # 判据用文件时间戳而非 git status——时间戳能同时覆盖「改了没提交」和「提交了没重建」
 # 两种漏判；只要有源文件比 tarball 新、或 tarball 不存在，就退回全量。
+# apps/desktop-host 必须一并比较：它是 RELEASE_PACKAGES 之一，config/ 与 lib/ 都经
+# tarball（release:pack，只有全量路径才跑）分发，漏掉会让改动被快捷路径静默丢弃。
 PACKED_DSH="$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/packed/dsh"
 TARBALL_REF=$(ls -t "$PACKED_DSH"/*.tgz 2>/dev/null | head -1 || true)
 if [ "${DSH_FORCE_FULL_BUILD:-}" = "1" ]; then
   echo "    强制全量构建（DSH_FORCE_FULL_BUILD=1）"
   pnpm run prepare:desktop
 elif [ -n "$TARBALL_REF" ] \
-  && [ -z "$(find "$REPO_ROOT/packages" "$REPO_ROOT/vendor" "$REPO_ROOT/patches" -type f -newer "$TARBALL_REF" -not -path '*/node_modules/*' -not -path '*/lib/*' -print -quit 2>/dev/null)" ] \
+  && [ -z "$(find "$REPO_ROOT/packages" "$REPO_ROOT/vendor" "$REPO_ROOT/patches" "$REPO_ROOT/apps/desktop-host" -type f -newer "$TARBALL_REF" -not -path '*/node_modules/*' -not -path '*/lib/*' -print -quit 2>/dev/null)" ] \
   && [ ! "$REPO_ROOT/pnpm-lock.yaml" -nt "$TARBALL_REF" ]; then
-  echo "    packages/ 自上次打包未变 → 跳过重建（省约 100 秒；要强制全量请设 DSH_FORCE_FULL_BUILD=1）"
+  echo "    packages/ 与 apps/desktop-host 自上次打包未变 → 跳过重建（省约 100 秒；要强制全量请设 DSH_FORCE_FULL_BUILD=1）"
   cd "$REPO_ROOT/apps/desktop"
   pnpm run build
   pnpm run prepare:runtime
@@ -62,21 +64,21 @@ elif [ -n "$TARBALL_REF" ] \
   pnpm run prepare:dsh
   cd "$REPO_ROOT"
 else
-  echo "    packages/ 有更新 → 全量重建"
+  echo "    packages/ 或 apps/desktop-host 有更新 → 全量重建"
   pnpm run prepare:desktop
 fi
 
-echo "==> [2/5] electron-builder 打包（未签名）"
+echo "==> [2/6] electron-builder 打包（未签名）"
 cd "$REPO_ROOT/apps/desktop"
 pnpm exec electron-builder \
   --config "$REPO_ROOT/packaging/electron-builder.unsigned.config.mjs" \
   --mac --arm64 --dir --publish never
 
-echo "==> [3/5] 安装到 /Applications"
+echo "==> [3/6] 安装到 /Applications"
 rm -rf "$INSTALLED_APP"
 cp -R "$APP_OUT" "$INSTALLED_APP"
 
-echo "==> [4/5] ad-hoc 签名（必须在最终位置就地进行）"
+echo "==> [4/6] ad-hoc 签名（必须在最终位置就地进行）"
 # 只签最外层 bundle：它会重建 _CodeSignature 并对资源「计算」哈希，不修改文件内容。
 # 绝不加 --deep —— 那会重签 Resources/dsh 下的原生文件、改变其字节，
 # 使 desktop-runtime.json 记录的哈希与实际不符，启动时的运行时校验会判定资源被篡改。
@@ -87,8 +89,13 @@ echo "==> [4/5] ad-hoc 签名（必须在最终位置就地进行）"
 codesign --force --sign - "$INSTALLED_APP"
 codesign --verify "$INSTALLED_APP"
 
-echo "==> [5/5] 安装桌面通知插件"
+echo "==> [5/6] 安装桌面通知插件"
 bash "$REPO_ROOT/packaging/install-desktop-notification.sh"
+
+echo "==> [6/6] 分发共用组件到其它前端（TUI）"
+# Electron 侧的那份由本脚本第 1 步组装进 app，无需在此处理；
+# 这里只补齐 dsh-tui 的运行副本，详见 packaging/sync-shared-components.sh 顶部注释。
+bash "$REPO_ROOT/packaging/sync-shared-components.sh"
 
 echo
 echo "完成：$INSTALLED_APP"

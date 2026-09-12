@@ -109,10 +109,12 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
 | `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns` 的生成脚本；接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
-| `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本** |
+| `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 与 `apps/desktop-host/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本**。`apps/desktop-host` 是 09-12 补进判据的——它是 `RELEASE_PACKAGES` 之一、内容经 tarball 分发，漏比会让它的改动被快捷路径静默丢弃（见坑 17 末条） |
+| `packaging/sync-shared-components.sh`（新增）、`packaging/build-app.sh` | **共用组件分发到 TUI**：两个前端共用同一批注入组件（如 `skill-search.mjs`），但运行副本各自独立——Electron 那份由打包第 1 步组装进 app（直接改 app 内文件会破坏 ad-hoc 签名，所以不在此处理），TUI 那份在 `~/.dsh/.agent-presets/liangshen/`、改仓库源码不会自动更新。本脚本把权威源 `packages/preset/agent-presets/presets/standard/` 下的共用组件同步过去：幂等（内容相同即跳过）、目标目录不存在（换机后 TUI 未装）则跳过并提示。`build-app.sh` 的 [6/6] 步自动调用，也可单独跑。**不进换机恢复清单**——属辅助步骤，缺失不影响二开功能 |
 | `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**零上游文件改动** |
-| `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换 |
+| `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见） |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
+| `apps/desktop-host/config/desktop.cordis.patch.yml`（新增 1 段） | **开启会话内容全文搜索**：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层是最后应用的最高优先级 patch 且随 app 打包分发，在此覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。选这里而非 profile 的 `cordis.patch.yml`，是因为 profile 目录被 `~/.dsh` 的 `.gitignore` 排除、换机与重置 Desktop 都会丢 |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
 
 ## 四、踩坑记录
@@ -268,10 +270,11 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   | `prepare:runtime` + `prepare:packages` | 6 秒 | |
   | electron-builder（含下载 electron zip） | ~1–2 分钟 | |
 
-- **已优化（2026-09-11）**：`packaging/build-app.sh` 内置快捷路径——检测到 `packages/` 自上次打包未变时，跳过 `build:official` + `release:pack`，只跑 `apps/desktop` 的 build + 三段 prepare。**实测整包 284 秒 → 58 秒**。
+- **已优化（2026-09-11）**：`packaging/build-app.sh` 内置快捷路径——检测到 `packages/` 与 `apps/desktop-host/` 自上次打包未变时，跳过 `build:official` + `release:pack`，只跑 `apps/desktop` 的 build + 三段 prepare。**实测整包 284 秒 → 58 秒**。
   - **正确性已验证**：快捷路径产物与全量产物**逐字节一致**（`desktop-runtime.json` 的 11281 个文件哈希全同），且能正常启动（启动时的运行时自校验通过）。判据本身也做了双向实测（改一个源文件 → 正确退回全量）。
   - **判据用文件时间戳**（`find -newer`）而非 `git status`：时间戳能同时覆盖「改了没提交」和「提交了没重建」两种漏判。任何源文件比 tarball 新、lockfile 更新、或 tarball 不存在，都退回全量；强制全量：`DSH_FORCE_FULL_BUILD=1`。
   - **没有改任何上游脚本**——判断逻辑全在 `build-app.sh` 里。
+  - **⚠️ 判据盲区（2026-09-12 修复）**：原判据只比 `packages/`、`vendor/`、`patches/`，**漏了 `apps/desktop-host/`**。它是 `RELEASE_PACKAGES` 之一，`config/desktop.cordis.patch.yml` 与编译后的 `lib/` 都经 tarball 分发，而 tarball 只有 `release:pack`（全量路径）才重打。实测：改了 desktop-host 的 config 后跑快捷路径，`/Applications` 里仍是旧文件（611B vs 源文件 1238B，`grep session-query-sqlite` 无匹配），**改动被静默丢弃**。现已把 `apps/desktop-host` 一并纳入 `find -newer` 判据。
 - **⚠️ 验证打包改动时的一个陷阱**：**打包流程本身是非确定性的**——同样源码连续跑两次全量，产物会有 **192 个 `package.json` 哈希不同**（元数据差异，不影响运行；两次全量之间也一样）。所以**不要拿「与历史基准字节比对」当判据**，那会得出假阳性（为此刻意白跑过两轮全量）。正确做法：把「待验证产物」与「刚跑完的一次全量产物」直接对比。
 
 ### 坑 18：在 DSH 里 commit / push 本仓库，git hook 会「假失败」
@@ -304,7 +307,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    git clone git@github.com:wentao-hu/.dsh.git ~/.dsh   # ~/.dsh 已存在时照该仓库 README 的「情形 B」处理，勿整目录覆盖
    bash ~/.dsh/machine/install.sh   # 一并恢复 ~/.zshrc 的 DSH 段与每周一上游追踪任务
    ```
-   仓库内含 `settings.yaml`、`.env`、`.agent-presets/liangshen/`、`machine/`；排除项（`.credentials.yaml`、`profiles/`、`sessions/`、`storages/`）及原因见该仓库 README。配置要点：
+   仓库内含 `settings.yaml`、`.env`、`.agent-presets/liangshen/`、`machine/`；排除项（`.credentials.yaml`、`profiles/`、`sessions/`、`storages/`、`cache/`）及原因见该仓库 README。配置要点：
    - `~/.dsh/settings.yaml`：`llm-pi-ai.providers.sankuai`（`api: openai-responses`、`baseURL: https://aigc.sankuai.com/agentic/v1`、`apiKeyEnv: SANKUAI_API_KEY`、`contextWindow: 1000000`、`maxTokens: 393216`、`input: [text, image]`、`reasoningEfforts` 映射）+ `agent-default-model` 指向该路由
    - `~/.dsh/.env`：`SANKUAI_API_KEY=<AppID>`、`RESPONSES_NATIVE_TOOLS=web_search`
    - ⚠️ 变量名**不能**用 `DSH_` 前缀：app-boot 的 `BOOTSTRAP_PREFIXES` 会拒绝 `.env` 里的 `DSH_*`
@@ -329,6 +332,8 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 
    通知链路：首次启动应弹一条「DeepSeek Harness 通知已启用」；切到别的应用后发一条消息，跑完应弹「第 N 回合已完成」。此时「系统设置 → 通知」里能看到本应用。
    profile 由应用首次启动时生成，插件装不进去时隔一层排查：`bash packaging/install-desktop-notification.sh`（幂等，可随时重跑）。
+
+   会话内容搜索（桌面端）：在左侧搜索框输入一个**只出现在某条对话正文、不在任何会话标题里**的词——应列出那条会话并带正文片段。若仍提示「内容搜索暂不可用，仅显示名称匹配」，说明 app 里的 `config/desktop.cordis.patch.yml` 没带上这次改动：`grep -A3 session-query-sqlite "/Applications/DeepSeek Harness.app/Contents/Resources/dsh/node_modules/@deepseek-ai/dsh-desktop-host/config/desktop.cordis.patch.yml"` 应看到 `first-search`。索引落在 `~/.dsh/cache/session-query.sqlite`，删掉即重建。
 
 ## 六、跟随上游更新
 
@@ -403,6 +408,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 | 应用图标 | Dock 里不是 Electron 默认图标 |
 | 桌面完成通知 | 窗口失焦时跑完一回合，弹「第 N 回合已完成」 |
 | 服务端原生搜索 | app 里问「今天的一条科技新闻」，能给出当日真实新闻 |
+| 会话内容搜索 | 左侧搜索框搜一个**只出现在对话正文、不在任何会话标题里**的词，应列出该会话并带正文片段（上游默认 `openAt: never` 关闭，本 fork 在 `apps/desktop-host/config/desktop.cordis.patch.yml` 开启，随 app 打包分发故换机自动恢复） |
 | 沙箱提权放行 | 模型把提权字段填成当前模式时不再报 `not strictly wider` |
 | 提权占位词剔除（坑 10） | 让模型跑任意 bash 命令，stderr 出现 `dsh: dropped blank tool arguments for bash: sandbox_permissions, …`，且该命令在会话日志里 `tool/call` 只计 1 次（不是 2~3 次重试） |
 | 403 错误分类 | 网关返 403 时显示 `FORBIDDEN` 而非 `AUTH` |
@@ -412,13 +418,26 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 
 1. **改动收敛**：能放 `packaging/`（本 fork 专属区）就不动上游源码；必须改上游源码时，改动点写进 `packaging/README.md` 第三节「改动清单」——那是 `git merge upstream/master` 时唯一的冲突面清单，漏登记等于下次合并时丢改动。
 2. **被忽略但必需的文件**：`packaging/desktop-notification/lib/` 是手写源码（不是构建产物），却被上游 `lib/` 的忽略规则命中，提交时必须 `git add -f`——**不要改上游 `.gitignore`**。
-3. **打包一律用 `bash packaging/build-app.sh`，别自己拼命令**：它内置快捷路径——`packages/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**（产物与全量逐字节一致，已实测）；需要强制全量时设 `DSH_FORCE_FULL_BUILD=1`。耗时地图与排查陷阱见 `packaging/README.md` 坑 17——**尤其别去查网络**（真正走网络的只有 9 个包）。
+3. **打包一律用 `bash packaging/build-app.sh`，别自己拼命令**：它内置快捷路径——`packages/` 与 `apps/desktop-host/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**（产物与全量逐字节一致，已实测）；需要强制全量时设 `DSH_FORCE_FULL_BUILD=1`。耗时地图与排查陷阱见 `packaging/README.md` 坑 17——**尤其别去查网络**（真正走网络的只有 9 个包）。
 
 ## 四、二开产物位置
 
 - 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
 - 桌面端改动：`apps/desktop/`
 - 桌面通知插件：`packaging/desktop-notification/`（零上游文件改动）
+
+## 五、打包与本机环境的硬约束
+
+**完成标准**：涉及可打包 APP（SwiftUI/AppKit、Electron 等）的改动，**完成标准 = 代码改完 + 打包出可运行产物**（`.app`/`.dmg`/`.pkg`），二者缺一不可；打包失败须排查根因、修复后重试，直到产物生成并告知路径才算完成。
+
+**重打包通用规则**（任何 Electron 项目都成立）：
+
+1. **改源码不影响已装的 app**：app 加载的是安装包内的代码，改完必须重新打包安装
+2. **替换 `.app` 后运行中的旧进程不会自动更新**：`open` 只激活旧进程，读到的仍是旧代码；验证新版前先完全退出（`Cmd+Q` 或 `pkill`），确认残留进程为 0 再启动
+3. **增量跳过与环境坑**：按文件时间戳判断源码/依赖/补丁是否变化，未变则跳过最贵的构建步骤，并留一个强制全量的环境变量；构建原生模块固定用系统 Node（Electron 自带 Node 会让 Node-API headers 定位失败），registry 默认国内镜像（上游硬编码官方源在部分网络必超时）
+4. **提速别凭感觉**：`downloaded N` 含「从本地 store 取包」，不等于网络下载量，耗时大头在本地组装；跳过任何打包步骤的前提是先证明产物等价，基准必须是「刚跑完的一次全量产物」——打包有非确定性，历史基准会给出假阳性
+
+**PATH 与 node 版本**：默认 PATH 里没有 homebrew；`node` / `pnpm` / `gh` 在 `/opt/homebrew/bin` 与 `/usr/local/bin`，两处 node 版本不同（`/usr/local/bin` 的 v22.14.0 低于 harness 要求的 `^22.19 || >=24`）。跑构建或 git hook 前先 `export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"`，**顺序不能反**，反了会以 `tsdown: Failed to import module "unrun"` 的形式假失败。
 ````
 
 **为什么放 `CLAUDE.local.md` 而不是 `AGENTS.md`**：`AGENTS.md` 是上游文件（根 `CLAUDE.md` 与 `packages/CLAUDE.md` 都是它的符号链接），往里写规则会扩大跟随上游 `git merge` 的冲突面，与规则本身要保护的目标相悖。
