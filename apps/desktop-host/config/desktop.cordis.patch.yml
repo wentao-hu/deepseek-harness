@@ -32,3 +32,13 @@
 
     - id: ui-directory-picker-native
       name: '@deepseek-ai/dsh-client-ui-directory-picker-native'
+
+# 开启会话内容全文搜索。上游 base/web-app 两层都把它配成 openAt: never（禁用），
+# 侧边栏搜索因此只匹配会话标题与工作区名。本层是最后应用的最高优先级 patch，
+# 且随 app 打包分发，故在这里开启：换机、重装、重置 profile 后都不需要手工重做。
+# path 指向 harness cache 目录下的持久索引（:memory: 会在每次应用重启后重建）；
+# first-search 让首次搜索才打开索引，避免拖慢启动。
+- id: session-query-sqlite
+  config:
+    path: !!js dshHomePath('cache', 'session-query.sqlite')
+    openAt: first-search

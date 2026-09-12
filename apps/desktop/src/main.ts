@@ -66,6 +66,7 @@ interface RuntimeResources {
   readonly node: string
   readonly pnpm: string
   readonly dsh: string
+  readonly localPlugins: string
 }
 
 function runtimeResources(): RuntimeResources {
@@ -75,7 +76,11 @@ function runtimeResources(): RuntimeResources {
   const pnpm = (development ? process.env.DSH_DESKTOP_PNPM_ENTRY : undefined)
     ?? join(process.resourcesPath, 'runtime', 'pnpm', 'bin', 'pnpm.mjs')
   const dsh = (development ? process.env.DSH_DESKTOP_DSH_DIR : undefined) ?? join(process.resourcesPath, 'dsh')
-  return { node, pnpm, dsh }
+  // Kept outside Resources/dsh: verifyDesktopRuntime compares that tree's complete
+  // file inventory against its build-time manifest, so an extra directory voids it.
+  const localPlugins = (development ? process.env.DSH_DESKTOP_LOCAL_PLUGINS_DIR : undefined)
+    ?? join(process.resourcesPath, 'local-plugins')
+  return { node, pnpm, dsh, localPlugins }
 }
 
 function developmentHostInspectPort(enabled: boolean): number | undefined {

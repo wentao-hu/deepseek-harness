@@ -145,10 +145,17 @@ if (Test-Path $artifacts) {
 # 所以这一步通常要等应用跑过一次才真正生效（脚本自身幂等，随时可重跑）。
 Write-Host ''
 Write-Host '==> [3/3] 安装桌面通知插件'
+# 顺带把自愈副本物化进 win-unpacked（mac 侧由 build-app.sh 内置进 .app，Windows 的
+# 官方打包命令插不进去，只能在打包后补 —— master 2026-09-12 的插件自愈机制，
+# 见 install-desktop-notification.ps1 第 3 步的说明）。
+$unpacked = Join-Path $artifacts 'win-unpacked'
+if (Test-Path $unpacked) { $env:DSH_DESKTOP_WIN_UNPACKED = $unpacked }
 try {
   & (Join-Path $PSScriptRoot 'install-desktop-notification.ps1')
 } catch {
   Write-Host "    提示：通知插件未安装（$($_.Exception.Message)），不影响已产出的安装包。"
+} finally {
+  Remove-Item Env:\DSH_DESKTOP_WIN_UNPACKED -ErrorAction SilentlyContinue
 }
 
 Write-Host ''

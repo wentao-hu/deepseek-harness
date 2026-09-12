@@ -56,4 +56,23 @@ PY
 
 echo "已安装通知插件：$TARGET"
 echo "已登记 profile bundles：$PKG_NAME"
+
+# 3) app 内置副本才是权威源：app 每次准备 profile 都会用它覆盖 profile
+#    （apps/desktop/src/project-manager.ts 的 materializeLocalPlugins）。
+#    所以改了仓库源码却没重新打包时，重跑本脚本是白改——这里直接点破。
+APP_DIR="${DSH_DESKTOP_APP:-/Applications/DeepSeek Harness.app}"
+APP_COPY="$APP_DIR/Contents/Resources/local-plugins/$PKG_NAME"
+if [ -d "$APP_COPY" ]; then
+  STALE=""
+  for FILE in package.json cordis.patch.yml lib/index.js lib/client.js; do
+    cmp -s "$PKG_SRC/$FILE" "$APP_COPY/$FILE" || STALE="$STALE $FILE"
+  done
+  if [ -n "$STALE" ]; then
+    echo
+    echo "警告：app 内置的副本与仓库源码不一致（不一致的文件：${STALE# }）。"
+    echo "      app 每次准备 profile 都会用内置副本覆盖 profile，上面这次复制会在下次启动时被覆盖。"
+    echo "      要让改动生效，必须重新打包：bash packaging/build-app.sh"
+  fi
+fi
+
 echo "完全退出桌面应用再打开即生效（插件只在启动时加载）。"

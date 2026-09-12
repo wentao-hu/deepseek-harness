@@ -83,4 +83,46 @@ try {
 
 Write-Host "已安装通知插件：$target"
 Write-Host "已登记 profile bundles：$pkgName"
+
+# 3) 把插件副本物化进应用的 resources\local-plugins，作为 app「自愈」的权威源。
+#    背景（master 2026-09-12 的修复，apps/desktop/src/project-manager.ts 的
+#    materializeLocalPlugins）：profile 清单只接受 registry 精确版本，本地插件进不了
+#    dependencies，于是任何一次 pnpm add/remove/update 都会把它当多余包清掉；
+#    app 每次准备 profile 前会用内置副本重新物化，装第三方插件不再误伤通知插件。
+#    mac 侧由 build-app.sh 在打包时把副本内置进 Contents/Resources/local-plugins；
+#    Windows 走官方 package:desktop:win:x64:unsigned 一条命令到底、插不进去，
+#    所以在这里对已安装的应用就地补齐，语义与 mac 对齐。
+#    为什么必须放 resources\local-plugins 而不是 resources\dsh：
+#    resources\dsh 由 desktop-runtime.json 做全量文件清单校验（runtime-tree.ts 的
+#    verifyDesktopRuntime），多一个文件即判「资源被篡改」拒绝启动；local-plugins
+#    在校验范围之外，正是官方为这类文件预留的位置。文件集与 profile 安装一致
+#    （不带 tests/ —— 留着会被每次启动复制进 profile 的 node_modules）。
+$appDirs = @()
+if ($env:DSH_DESKTOP_APP_DIR) { $appDirs += $env:DSH_DESKTOP_APP_DIR }
+$appDirs += @(
+  (Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness'),
+  (Join-Path $env:LOCALAPPDATA 'Programs\dsh-desktop')
+)
+if ($env:DSH_DESKTOP_WIN_UNPACKED) { $appDirs += $env:DSH_DESKTOP_WIN_UNPACKED }
+
+$appCopyRoot = $null
+foreach ($dir in $appDirs) {
+  if ($dir -and (Test-Path (Join-Path $dir 'resources'))) { $appCopyRoot = $dir; break }
+}
+if ($appCopyRoot) {
+  $appCopy = Join-Path (Join-Path $appCopyRoot 'resources') 'local-plugins'
+  $dst = Join-Path $appCopy $pkgName
+  if (Test-Path $dst) { Remove-Item -LiteralPath $dst -Recurse -Force }
+  New-Item -ItemType Directory -Path (Join-Path $dst 'lib') -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $pkgSrc 'package.json') -Destination $dst -Force
+  Copy-Item -LiteralPath (Join-Path $pkgSrc 'cordis.patch.yml') -Destination $dst -Force
+  Copy-Item -LiteralPath (Join-Path $pkgSrc 'lib\index.js') -Destination (Join-Path $dst 'lib') -Force
+  Copy-Item -LiteralPath (Join-Path $pkgSrc 'lib\client.js') -Destination (Join-Path $dst 'lib') -Force
+  Write-Host "已把插件副本物化进应用（自愈源）：$dst"
+  Write-Host '      改了 packaging\desktop-notification\ 源码后，重跑本脚本即可同步，无需重新打包。'
+} else {
+  Write-Host '提示：没找到已安装的 DeepSeek Harness（可用 DSH_DESKTOP_APP_DIR 指定安装目录）。'
+  Write-Host '      跳过应用内自愈副本 —— 装好应用后重跑本脚本即可补上。'
+}
+
 Write-Host '完全退出桌面应用再打开即生效（插件只在启动时加载）。'

@@ -54,7 +54,9 @@ function setup(): { root: string; manager: DesktopProjectManager } {
   const root = temporaryRoot()
   const dsh = join(root, 'resources', 'dsh')
   runtimeFixture(dsh)
-  return { root, manager: new DesktopProjectManager(resolveDesktopPaths(join(root, '.dsh')), { node: process.execPath, pnpm: writeFakePnpm(root), dsh }) }
+  // Absent by default: suites that do not exercise bundled plugins keep the copy a no-op.
+  const localPlugins = join(root, 'resources', 'local-plugins')
+  return { root, manager: new DesktopProjectManager(resolveDesktopPaths(join(root, '.dsh')), { node: process.execPath, pnpm: writeFakePnpm(root), dsh, localPlugins }) }
 }
 function calls(root: string): { args: string[]; registry: string }[] {
   const path = join(root, 'pnpm-log.jsonl')
@@ -177,6 +179,24 @@ describe('desktop external plugin profile', () => {
     await expect(retry.applyRelease()).resolves.toBe(true)
     expect(retry.listPlugins()).toEqual([{ name: 'plugin', version: '1.0.0', enabled: true }])
     await expect(retry.applyRelease()).resolves.toBe(false)
+  })
+
+  it('restores a bundled local plugin after package work removed it from the profile', async () => {
+    const { manager } = setup()
+    const bundled = join(manager.runtime.localPlugins, 'dsh-local-plugin')
+    mkdirSync(bundled, { recursive: true })
+    writeFileSync(join(bundled, 'package.json'), JSON.stringify({ name: 'dsh-local-plugin', version: '1.0.0', dsh: { bundle: { patch: './bundle.yml' } } }))
+    writeFileSync(join(bundled, 'bundle.yml'), '[]\n')
+    await manager.applyRelease()
+    // The install script registers the name; nothing else about the profile is a dependency,
+    // so pnpm treats the copied directory as extraneous and the rebuild path removes it outright.
+    const manifestPath = join(manager.paths.profile, 'package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { dsh: { profile: { bundles: string[] } } }
+    manifest.dsh.profile.bundles.push('dsh-local-plugin')
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    rmSync(join(manager.paths.profile, 'node_modules'), { recursive: true, force: true })
+    await expect(manager.applyRelease()).resolves.toBe(true)
+    expect(readFileSync(join(manager.paths.profile, 'node_modules/dsh-local-plugin/package.json'), 'utf8')).toContain('dsh-local-plugin')
   })
 
   it('preserves unknown files when initializing a profile', async () => {
