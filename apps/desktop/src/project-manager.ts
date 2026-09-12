@@ -3,6 +3,7 @@
 import { valid } from 'semver'
 import { spawn } from 'node:child_process'
 import {
+  cpSync,
   existsSync,
   fsyncSync,
   ftruncateSync,
@@ -57,6 +58,8 @@ export interface DesktopRuntimeExecutables {
   readonly node: string
   readonly pnpm: string
   readonly dsh: string
+  /** Directory of plugins the application carries and copies into every profile. */
+  readonly localPlugins: string
 }
 
 /** Hooks that stop the backend before profile writes and restart it after success. */
@@ -218,6 +221,28 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
   return { name: requestedName, version: manifest.version, enabled: profilePluginNames(projectDir).includes(requestedName) }
 }
 
+/**
+ * Copy the plugins the application carries into a profile's package directory.
+ *
+ * A profile manifest accepts exact registry versions only, so a plugin shipped
+ * in the application cannot be a dependency; it is copied in instead. pnpm
+ * prunes every package the manifest does not list, and the rebuild path removes
+ * `node_modules` outright, so the copy is repeated wherever a profile is
+ * prepared. Directory names become package names and must be valid ones.
+ * @param projectDir - Desktop profile directory.
+ * @param sourceDir - Bundled local plugin root; a missing root is ignored.
+ */
+function materializeLocalPlugins(projectDir: string, sourceDir: string): void {
+  if (!existsSync(sourceDir)) return
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !PACKAGE_NAME_PATTERN.test(entry.name)) continue
+    const target = join(projectDir, 'node_modules', entry.name)
+    removeOwnedDirectory(target)
+    mkdirSync(dirname(target), { recursive: true })
+    cpSync(join(sourceDir, entry.name), target, { recursive: true })
+  }
+}
+
 /** Desktop npm project manager with direct writes and no rollback. */
 export class DesktopProjectManager {
   private lockDescriptor: number | undefined
@@ -298,6 +323,7 @@ export class DesktopProjectManager {
 
   private prepareProfile(projectDir: string): void {
     const runtime = this.currentRuntime()
+    materializeLocalPlugins(projectDir, this.runtime.localPlugins)
     linkDesktopHostPackages(projectDir, this.runtime.dsh, runtime)
     validateDesktopPluginGraph(projectDir, this.runtime.dsh, runtime, profilePluginNames(projectDir))
   }

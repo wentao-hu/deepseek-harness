@@ -111,7 +111,8 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
 | `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 与 `apps/desktop-host/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本**。`apps/desktop-host` 是 09-12 补进判据的——它是 `RELEASE_PACKAGES` 之一、内容经 tarball 分发，漏比会让它的改动被快捷路径静默丢弃（见坑 17 末条） |
 | `packaging/sync-shared-components.sh`（新增）、`packaging/build-app.sh` | **共用组件分发到 TUI**：两个前端共用同一批注入组件（如 `skill-search.mjs`），但运行副本各自独立——Electron 那份由打包第 1 步组装进 app（直接改 app 内文件会破坏 ad-hoc 签名，所以不在此处理），TUI 那份在 `~/.dsh/.agent-presets/liangshen/`、改仓库源码不会自动更新。本脚本把权威源 `packages/preset/agent-presets/presets/standard/` 下的共用组件同步过去：幂等（内容相同即跳过）、目标目录不存在（换机后 TUI 未装）则跳过并提示。`build-app.sh` 的 [6/6] 步自动调用，也可单独跑。**不进换机恢复清单**——属辅助步骤，缺失不影响二开功能 |
-| `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**零上游文件改动** |
+| `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**09-12 起不再是「零上游文件改动」**——插件必须随 app 内置才能自愈，为此改了 `apps/desktop` 两个文件，见下一行 |
+| `apps/desktop/src/project-manager.ts`、`apps/desktop/src/main.ts`、`apps/desktop/tests/project-manager.spec.ts`、`apps/desktop/tests/plugin-pnpm.spec.ts`、`packaging/build-app.sh` | **本地插件自愈**（坑 19）：profile 清单只接受 registry 精确版本（`projectManifest`），通知插件进不了 `dependencies`，于是每次 `pnpm add/remove/update` 都会把它当多余包清掉，`rebuild` 分支更会直接删掉整个 `node_modules`——之后启动校验报 `missing local plugin dsh-desktop-notification`、app 拒绝启动（09-12 实际发生过一次）。修法沿用上游已有的 `linkDesktopHostPackages` 模式：`build-app.sh` 第 3 步把插件副本内置到 `Contents/Resources/local-plugins/`，`prepareProfile` 在校验前调用新增的 `materializeLocalPlugins` 重新物化，`DesktopRuntimeExecutables` 相应增加必填的 `localPlugins` 字段（`plugin-pnpm.spec.ts` 构造该值时同步补上，漏改会让 pre-push 的 typecheck 直接失败）。**副本绝不能放 `Resources/dsh`**——`verifyDesktopRuntime` 对该目录做全量文件清单比对，多一个文件即判资源被篡改。副作用两条：① 改 `packaging/desktop-notification/` 后**必须重新打包**，只重跑安装脚本会被 app 的内置副本覆盖；② app 只物化文件、不动 `bundles` 登记，所以「禁用第三方插件」仍然有效，换机首次启用仍靠安装脚本登记 |
 | `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见） |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
 | `apps/desktop-host/config/desktop.cordis.patch.yml`（新增 1 段） | **开启会话内容全文搜索**：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层是最后应用的最高优先级 patch 且随 app 打包分发，在此覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。选这里而非 profile 的 `cordis.patch.yml`，是因为 profile 目录被 `~/.dsh` 的 `.gitignore` 排除、换机与重置 Desktop 都会丢 |
@@ -292,6 +293,28 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **⚠️ 不要用 `git push --no-verify` 绕过**：门禁本身没问题，只是环境没配对；跳过等于放弃 typecheck 这道上游质量检查。
 - **另注**：`check-upstream.sh` 第 35 行自带 `export PATH="/opt/homebrew/bin:/usr/local/bin:..."`，所以每周一的上游追踪任务**不受此坑影响**。
 
+### 坑 19：装一次第三方插件，通知插件就被删、app 直接起不来
+
+- **现象**：在桌面 app 的「桌面插件…」窗口里装任意一个插件，重启后启动失败页报
+  `desktop profile: missing local plugin dsh-desktop-notification`。
+- **根因（实测，09-12 发生一次）**：app 装插件时在 profile 目录跑
+  `pnpm add <spec> --save-exact --ignore-scripts`，而 **pnpm 会清理一切不在
+  `dependencies` 里的包**；通知插件是安装脚本复制进去的、按设计进不了 `dependencies`
+  （`projectManifest` 只接受 registry 精确版本，`file:` 之类一律拒绝），于是被当多余包删掉。
+  但 `bundles` 列表里的名字还在（app 不会自动清理非依赖项），启动校验走到
+  `profile-packages.ts` 的 `missing local plugin` 就拒绝启动。**与具体插件无关——装任何插件都会触发。**
+- **连带事故**：手动把依赖条目删掉、却不重新生成 `pnpm-lock.yaml`，会让 app 的 rebuild 分支
+  在 `pnpm install --frozen-lockfile` 处报 `ERR_PNPM_OUTDATED_LOCKFILE`；该分支在跑 pnpm 前
+  已经 `removeOwnedDirectory(node_modules)`，所以还会**留下一个被删空的 `node_modules` 和一个
+  `desktop-packages-pending` 标记**（app 见到该标记即拒绝继续）。修复要点：改 `package.json`
+  必须同步重建 lockfile（`pnpm install --no-frozen-lockfile --ignore-scripts`），并删掉该标记。
+- **解法**：见第三节「本地插件自愈」一行——插件副本随 app 内置到
+  `Contents/Resources/local-plugins/`，`prepareProfile` 每次校验前重新物化。
+- **⚠️ 副本不能放 `Resources/dsh`**：`verifyDesktopRuntime` 拿该目录的**完整文件清单**与
+  `desktop-runtime.json` 记录逐项比对，多一个文件就报 `integrity verification failed`。
+- **手动兜底**：`bash packaging/install-desktop-notification.sh`（幂等）只补文件与 `bundles` 登记；
+  若 app 已经带内置副本，重启一次即可自愈。
+
 ## 五、换机恢复清单
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0（`corepack enable --install-directory ~/.local/bin && corepack pnpm -v` 应输出 11.7.0）、Xcode Command Line Tools。
@@ -424,7 +447,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 
 - 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
 - 桌面端改动：`apps/desktop/`
-- 桌面通知插件：`packaging/desktop-notification/`（零上游文件改动）
+- 桌面通知插件：`packaging/desktop-notification/`（插件本体零上游改动；但为让它在 pnpm 操作后自愈，`apps/desktop` 有两个文件被改，见第三节与坑 19）
 
 ## 五、打包与本机环境的硬约束
 

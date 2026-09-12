@@ -78,6 +78,21 @@ echo "==> [3/6] 安装到 /Applications"
 rm -rf "$INSTALLED_APP"
 cp -R "$APP_OUT" "$INSTALLED_APP"
 
+# 二次开发：把通知插件副本内置进 app，供其每次准备 profile 时重新物化
+# （apps/desktop/src/project-manager.ts 的 materializeLocalPlugins）。
+# 为什么必须内置：profile 清单只接受 registry 精确版本，本地插件进不了 dependencies，
+# 于是每次 pnpm 操作都会把它当多余包清掉，rebuild 分支更会整个删掉 node_modules。
+# 为什么不能放 Resources/dsh：那里由 desktop-runtime.json 做全量文件清单校验
+# （apps/desktop/src/runtime-tree.ts 的 verifyDesktopRuntime），多一个文件即判资源被篡改。
+# 必须在第 4 步签名之前拷贝——签名会对资源计算哈希。
+rm -rf "$INSTALLED_APP/Contents/Resources/local-plugins"
+mkdir -p "$INSTALLED_APP/Contents/Resources/local-plugins"
+cp -R "$REPO_ROOT/packaging/desktop-notification" \
+  "$INSTALLED_APP/Contents/Resources/local-plugins/dsh-desktop-notification"
+# tests/ 不是插件运行时的一部分（与 install-desktop-notification.sh 复制的文件集对齐）；
+# 留着会被每次启动复制进 profile 的 node_modules。
+rm -rf "$INSTALLED_APP/Contents/Resources/local-plugins/dsh-desktop-notification/tests"
+
 echo "==> [4/6] ad-hoc 签名（必须在最终位置就地进行）"
 # 只签最外层 bundle：它会重建 _CodeSignature 并对资源「计算」哈希，不修改文件内容。
 # 绝不加 --deep —— 那会重签 Resources/dsh 下的原生文件、改变其字节，
