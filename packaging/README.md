@@ -460,7 +460,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 3. **增量跳过与环境坑**：按文件时间戳判断源码/依赖/补丁是否变化，未变则跳过最贵的构建步骤，并留一个强制全量的环境变量；构建原生模块固定用系统 Node（Electron 自带 Node 会让 Node-API headers 定位失败），registry 默认国内镜像（上游硬编码官方源在部分网络必超时）
 4. **提速别凭感觉**：`downloaded N` 含「从本地 store 取包」，不等于网络下载量，耗时大头在本地组装；跳过任何打包步骤的前提是先证明产物等价，基准必须是「刚跑完的一次全量产物」——打包有非确定性，历史基准会给出假阳性
 
-**PATH 与 node 版本**：默认 PATH 里没有 homebrew；`node` / `pnpm` / `gh` 在 `/opt/homebrew/bin` 与 `/usr/local/bin`，两处 node 版本不同（`/usr/local/bin` 的 v22.14.0 低于 harness 要求的 `^22.19 || >=24`）。跑构建或 git hook 前先 `export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"`，**顺序不能反**，反了会以 `tsdown: Failed to import module "unrun"` 的形式假失败。
+**PATH 与 node 版本**：默认 PATH 里没有 homebrew；`node` / `gh` 在 `/opt/homebrew/bin` 与 `/usr/local/bin`，两处 node 版本不同（`/usr/local/bin` 的 v22.14.0 低于 harness 要求的 `^22.19 || >=24`）。跑构建或 git hook 前先 `export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"`，**顺序不能反**，反了会以 `tsdown: Failed to import module "unrun"` 的形式假失败。这两处都**没有** `pnpm`（只有 `/usr/local/bin/corepack`），而 git hook 调的是裸 `pnpm`，所以跑 git hook 还要再配一行 shim——配方见 `packaging/README.md` 坑 18。
 ````
 
 **为什么放 `CLAUDE.local.md` 而不是 `AGENTS.md`**：`AGENTS.md` 是上游文件（根 `CLAUDE.md` 与 `packages/CLAUDE.md` 都是它的符号链接），往里写规则会扩大跟随上游 `git merge` 的冲突面，与规则本身要保护的目标相悖。
