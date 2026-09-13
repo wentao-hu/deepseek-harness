@@ -62,6 +62,8 @@ export function createElectronBuilderConfig(
       'lib/*.js',
       'lib/*.cjs',
       'renderer/**/*',
+      // 二次开发：状态栏图标由 lib/main.js 在运行时读取，必须随 asar 一起打包。
+      'assets/tray*.png',
       'package.json',
     ],
     extraResources: [

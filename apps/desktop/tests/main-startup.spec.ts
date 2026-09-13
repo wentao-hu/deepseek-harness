@@ -13,6 +13,7 @@ const harness = await vi.hoisted(async () => {
   }
   const windows: FakeWindow[] = []
   const hosts: FakeHost[] = []
+  const trays: FakeTray[] = []
   const handlers = new Map<string, (event: { senderFrame: { url: string } }) => unknown>()
   let pluginsEnabled = false
   let preparing = deferred()
@@ -58,6 +59,15 @@ const harness = await vi.hoisted(async () => {
     })
     constructor(readonly node: string, readonly runtime: string, readonly profile: string) { hosts.push(this) }
   }
+  class FakeNativeImage {
+    readonly setTemplateImage = vi.fn()
+    constructor(readonly path: string) {}
+    isEmpty() { return false }
+  }
+  class FakeTray extends EventEmitter {
+    readonly setToolTip = vi.fn()
+    constructor(readonly icon: FakeNativeImage) { super(); trays.push(this) }
+  }
   const app = Object.assign(new EventEmitter(), {
     isPackaged: true,
     name: 'Desktop test',
@@ -68,6 +78,8 @@ const harness = await vi.hoisted(async () => {
     requestSingleInstanceLock: () => true,
     exit: vi.fn(),
     relaunch: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
     quit: vi.fn(() => {
       const event = { preventDefault: vi.fn() }
       app.emit('before-quit', event)
@@ -75,13 +87,13 @@ const harness = await vi.hoisted(async () => {
     }),
   })
   return {
-    windows, hosts, handlers, app, FakeWindow, FakeHost,
+    windows, hosts, trays, handlers, app, FakeWindow, FakeHost, FakeTray, FakeNativeImage,
     dialog: { showErrorBox: vi.fn(), showMessageBox: vi.fn() },
     menu: {
       setApplicationMenu: vi.fn(),
       buildFromTemplate: vi.fn<(template: MenuItemConstructorOptions[]) => void>(),
     },
-    nativeTheme: { themeSource: 'system' as string },
+    nativeTheme: { themeSource: 'system' },
     applyRelease: vi.fn(() => { preparing.resolve(); return prepared.promise }),
     assertProfileRuntime: vi.fn(),
     canRecoverProfile: vi.fn(() => true),
@@ -92,7 +104,7 @@ const harness = await vi.hoisted(async () => {
     get pluginsEnabled() { return pluginsEnabled },
     set pluginsEnabled(value: boolean) { pluginsEnabled = value },
     reset() {
-      windows.length = 0; hosts.length = 0; handlers.clear(); app.removeAllListeners()
+      windows.length = 0; hosts.length = 0; trays.length = 0; handlers.clear(); app.removeAllListeners()
       app.isPackaged = true
       pluginsEnabled = false
       preparing = deferred(); prepared = deferred(); hostStarted = deferred()
@@ -109,8 +121,12 @@ vi.mock('electron', () => ({
     handle: (channel: string, handler: (event: { senderFrame: { url: string } }) => unknown) => { harness.handlers.set(channel, handler) },
   },
   Menu: harness.menu,
+  nativeImage: {
+    createFromPath: (iconPath: string) => new harness.FakeNativeImage(iconPath),
+  },
   nativeTheme: harness.nativeTheme,
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
+  Tray: harness.FakeTray,
 }))
 vi.mock('../src/paths.ts', () => ({ resolveDesktopPaths: () => ({ profile: 'desktop-test-profile' }) }))
 vi.mock('../src/project-manager.ts', () => ({
@@ -202,6 +218,40 @@ describe('desktop main startup', () => {
     expect(file?.map(entry => entry.role)).toEqual(['close'])
     const window = submenus.find(submenu => submenu.some(entry => entry.role === 'minimize'))
     expect(window?.map(entry => entry.role)).toEqual(['minimize', 'zoom'])
+  })
+
+  it('creates a status bar template icon that focuses the primary window when clicked', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const tray = harness.trays[0]!
+    expect(tray.icon.path).toMatch(/trayTemplate\.png$/u)
+    expect(tray.icon.setTemplateImage).toHaveBeenCalledWith(true)
+    expect(tray.setToolTip).toHaveBeenCalledWith('Desktop test')
+    tray.emit('click')
+    const window = harness.windows[0]!
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+    expect(harness.app.focus).toHaveBeenCalledWith({ steal: true })
+  })
+
+  it('stays resident after the last window closes and recreates it from the status bar icon', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    harness.prepared.resolve()
+    await harness.hostStarted.promise
+    harness.hosts[0]!.ready.resolve()
+    await harness.navigated.promise
+
+    const window = harness.windows[0]!
+    window.close()
+    harness.app.emit('window-all-closed')
+    expect(harness.app.quit).not.toHaveBeenCalled()
+
+    harness.trays[0]!.emit('click')
+    expect(harness.windows).toHaveLength(2)
+    const recreated = harness.windows[1]!
+    expect(recreated.options.show).toBe(true)
+    expect(recreated.urls).toEqual(['dsh-app://app/index.html'])
   })
 
   it('forces the light appearance so the native title bar renders white', async () => {

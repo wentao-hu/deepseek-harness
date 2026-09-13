@@ -62,6 +62,8 @@ ln -sf "$(pwd)/packaging/dsh-tui" ~/.local/bin/dsh-tui
 
 **完成通知**：任务跑完且窗口不在前台时弹 macOS 原生通知（标题为会话标题，正文形如「第 3 回合已完成」）。由 `packaging/desktop-notification/` 插件提供，`build-app.sh` 打包后自动装入 profile —— 首次加载会弹一条「通知已启用」确认，macOS 正是靠这次成功发送把应用登记进「系统设置 → 通知」（见坑 12）。
 
+**状态栏图标**：菜单栏里是「官方鲸鱼 + 插件轨道圆环 + 四个节点」的模板图（不是单纯金鱼/鲸鱼，避免与其它应用撞脸），点击图标会激活主窗口；窗口已用 `Cmd+W` 关掉时会重建。macOS 用模板图跟随菜单栏明暗自动反色；Windows / Linux 用彩色后备图。`Cmd+W` 关掉最后一个窗口后进程常驻后台，只有 `Cmd+Q` / 菜单「退出」才结束进程。
+
 ⚠️ **不要从已注入 `DSH_HOME` 的终端里直接运行它的可执行文件**（见坑 6）。从 Finder/Dock 启动不受影响。
 
 ### 重新打包（一条命令）
@@ -84,8 +86,11 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 
 脚本渲染出 16 / 32 / 64 / 128 / 256 / 512 / 1024 共 10 档 PNG 并打成 `icon.icns`，同时导出 `icon.png` 供 Windows / Linux 构建使用；中间目录 `icon.iconset` 用完即删。
 
+**状态栏图标**（新增）：源文件是 `assets/tray.svg`（macOS 模板图，纯黑 + alpha）和 `assets/tray-color.svg`（Windows / Linux 彩色后备图），同样由 `build:icons` 生成 `trayTemplate.png` / `trayTemplate@2x.png` 与 `trayColor.png` / `trayColor@2x.png`（18pt + 36px Retina）。四个源/产物都入库；app 运行时从 `asar` 内的 `assets/` 读取，`electron-builder.config.mjs` 的 `files` 已显式加入 `assets/tray*.png`。
+
 - `icon.icns`（约 1.4MB）是打包必需资源，直接入库。偏大的原因是图标是大面积渐变 + 抗锯齿边缘，PNG 压缩率天然低；本机没有 pngcrush/optipng 之类的无损压缩工具，实测 `sips` 重编码无效果（反而略增）。
 - 图标 SVG 带 alpha，**不能用 `sips`/`qlmanage` 转 PNG**——它们会把圆角外的透明压成白底，Dock 里就是白方块。`build-icons.mjs` 走 Electron 的 Chromium 离屏渲染来保留 alpha。
+- `build-icons.mjs` 现在把应用图标和状态栏图标排进**同一张离屏页面**，只创建一次 `BrowserWindow`、只截一次图，再用 `NativeImage.crop` 按区域裁切——实测同一进程里创建第二个离屏窗口会 `ERR_FAILED`。
 
 ## 三、改动清单（跟随上游更新的成本面）
 
@@ -100,14 +105,15 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `packages/sandbox/sandbox/src/escalation.ts`、`packages/sandbox/sandbox/tests/escalation.spec.ts`、`packages/shell/tool-bash/tests/tools.spec.ts`、`packages/shell/tool-pwsh/tests/tools.spec.ts` | **新增**（坑 14）：`approveEscalation` 在请求模式**等于**当前模式时直接放行，不再抛 `not strictly wider`。同族两个测试文件把「相等即报错」的用例换成真正的更窄场景 |
 | `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
 | `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
-| `apps/desktop/electron-builder.config.mjs` | **3 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标） |
+| `apps/desktop/electron-builder.config.mjs` | **5 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标）；`files` 增加 `assets/tray*.png`，让状态栏图标随 asar 一起分发（该项连注释共 2 行） |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 View 菜单**：绑定系统缩放 role（`resetZoom`/`zoomIn`/`zoomOut`）。上游用自定义菜单整体替换了 Electron 默认菜单却未补 View 菜单，导致 `Cmd +/-/0` 完全无响应。菜单文案走 locale 字典 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 Edit 菜单**：绑定系统剪贴板 role（`undo`/`redo`/`cut`/`copy`/`paste`/`selectAll`）。与上面 View 菜单同一根因——上游自定义菜单整体替换了默认菜单却未补 Edit 菜单，macOS 上 `Cmd+C/V/X/A/Z` 因此全部无响应。菜单文案走 locale 字典 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 File 与 Window 菜单**（坑 15）：File 绑 `close`（`Cmd+W` 关窗）、Window 用系统 `windowMenu`（`Cmd+M` 最小化 / Zoom）。这是同一根因的第三、四次——上游自定义菜单替换默认菜单后，View / Edit / File / Window **四组 role 全部缺失**。`Cmd+W` 可用也是「关窗不退出」体验的前提：关窗后后端仍在跑，点 Dock 重开是秒开 |
 | `apps/desktop/src/main.ts` | **标题栏变白**（坑 16）：`nativeTheme.themeSource = 'light'` 强制应用使用浅色外观，macOS 原生标题栏随之由深灰变为白色。做法借鉴 `~/MyApps/DSChat` |
 | `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **标题栏文字留空**（坑 16）：窗口标题不再跟随页面 `document.title`——harness 把当前对话名写进 `<title>`，标题栏会多出一行与界面内对话标题重复的小字。做法是 `title: ''` + 监听 `page-title-updated` 阻止改写，**布局不变**（不用 `titleBarStyle`，那会改布局） |
-| `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
-| `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns` 的生成脚本；接在 `build:icons` |
+| `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **状态栏图标常驻**：主进程创建 `Tray` 并保持模块级引用；点击图标调用 `focusPrimaryWindow`，窗口已被 `Cmd+W` 关掉时重建；macOS 用 `trayTemplate.png` 并 `setTemplateImage(true)`，其他平台用 `trayColor.png`。`window-all-closed` 在有图标时不再退出，`will-quit` 销毁图标。窗口 `Cmd+W` 关闭后后端继续跑，点图标秒回 |
+| `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物；状态栏图标：`tray.svg` / `tray-color.svg` 源文件 + `trayTemplate.png` / `trayTemplate@2x.png` / `trayColor.png` / `trayColor@2x.png` 产物 |
+| `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns`；同一张离屏页面里追加渲染两个状态栏 SVG，裁切并降采样出 18pt / @2x 两档。接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
 | `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 与 `apps/desktop-host/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本**。`apps/desktop-host` 是 09-12 补进判据的——它是 `RELEASE_PACKAGES` 之一、内容经 tarball 分发，漏比会让它的改动被快捷路径静默丢弃（见坑 17 末条） |
 | `packaging/sync-shared-components.sh`（新增）、`packaging/build-app.sh` | **共用组件分发到 TUI**：两个前端共用同一批注入组件（如 `skill-search.mjs`），但运行副本各自独立——Electron 那份由打包第 1 步组装进 app（直接改 app 内文件会破坏 ad-hoc 签名，所以不在此处理），TUI 那份在 `~/.dsh/.agent-presets/liangshen/`、改仓库源码不会自动更新。本脚本把权威源 `packages/preset/agent-presets/presets/standard/` 下的共用组件同步过去：幂等（内容相同即跳过）、目标目录不存在（换机后 TUI 未装）则跳过并提示。`build-app.sh` 的 [6/6] 步自动调用，也可单独跑。**不进换机恢复清单**——属辅助步骤，缺失不影响二开功能 |
@@ -429,6 +435,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 | Edit / View / File / Window 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应，`Cmd+W` 能关窗、`Cmd+M` 能最小化（上游自定义菜单把 View / Edit / File / Window 四组 role 全漏了，是本 fork 补的） |
 | 标题栏 | 白色底、无文字（只剩红黄绿按钮）——即使在深色系统下也应是白的（`nativeTheme.themeSource = 'light'`） |
 | 应用图标 | Dock 里不是 Electron 默认图标 |
+| 状态栏图标 | 菜单栏出现「鲸鱼 + 圆环 + 四节点」图标，点击能唤起主窗口；`Cmd+W` 关窗后图标仍在，再点能重建窗口 |
 | 桌面完成通知 | 窗口失焦时跑完一回合，弹「第 N 回合已完成」 |
 | 服务端原生搜索 | app 里问「今天的一条科技新闻」，能给出当日真实新闻 |
 | 会话内容搜索 | 左侧搜索框搜一个**只出现在对话正文、不在任何会话标题里**的词，应列出该会话并带正文片段（上游默认 `openAt: never` 关闭，本 fork 在 `apps/desktop-host/config/desktop.cordis.patch.yml` 开启，随 app 打包分发故换机自动恢复） |
