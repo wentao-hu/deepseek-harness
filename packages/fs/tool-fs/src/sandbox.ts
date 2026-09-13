@@ -13,7 +13,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, escalationHintMarker, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, approveEscalation, escalationHintMarker, normalizeEscalationRequest, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { FsError } from '@deepseek-ai/dsh-fs'
 
@@ -85,9 +85,12 @@ export class FsSandboxController {
    *   unsandboxed backend.
    */
   async resolvePolicy(toolName: string, args: FsEscalationArgs, exec: ToolExecution): Promise<SandboxExecutionPolicy | undefined> {
-    validateEscalationArgs(args.sandbox_permissions, args.justification)
+    // 二次开发：先归一化再校验——模型为「用不到」填的 `null` / 空串 / 枚举外自造词一律按
+    // 「未请求提权」处理，否则它要么在这里崩（`null.trim()`），要么拒掉整条本可执行的调用。
+    const escalation = normalizeEscalationRequest(args.sandbox_permissions, args.justification)
+    validateEscalationArgs(escalation?.mode, escalation?.justification)
     const standingPolicy = this.policy?.resolve({ ...exec.agent ? { session: exec.agent.session } : {} })
-    if (args.sandbox_permissions === undefined || args.justification === undefined) {
+    if (escalation === undefined || escalation.mode === undefined || escalation.justification === undefined) {
       return standingPolicy
     }
     if (this.escalationModes.length === 0) {
@@ -95,7 +98,7 @@ export class FsSandboxController {
     }
     const policy = standingPolicy as SandboxExecutionPolicy
     const approvedMode = await approveEscalation(
-      { requestedMode: args.sandbox_permissions, justification: args.justification, effectiveMode: policy.mode, subject: 'operation' },
+      { requestedMode: escalation.mode, justification: escalation.justification, effectiveMode: policy.mode, subject: 'operation' },
       {
         approver: this.ctx.get('approval'),
         agent: exec.agent,

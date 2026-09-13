@@ -61,6 +61,49 @@ export function validateEscalationArgs(sandboxPermissions: string | undefined, j
 }
 
 /**
+ * 二次开发：把模型传来的提权参数归一化成「真正的一次提权请求」或 `undefined`（未请求）。
+ *
+ * 背景：公司网关给函数工具强制加 `"strict": true`，而 strict 模式要求每个属性都出现在
+ * `required` 里——模型无法省略「本次用不到」的提权字段，只能填 `null`、空串，或在枚举
+ * 受限时自己编一个词（`"null"`、`"require"`…）。这类值经 schema 校验会拒掉整条调用
+ * （实测：`null` 报 `must be a string`，字符串 `"null"` 报 `must be one of [...]`），
+ * 模型只能反复重试同一调用。对提权参数而言，它们语义上都是「未提供」。
+ *
+ * 提权目标只认 {@link ESCALATION_TARGETS} 白名单：合法空间封闭而模型能编的词不封闭，
+ * 枚举外的一律算「未提供」，调用退回当前策略执行（真被沙箱挡住时，工具仍会照常给出
+ * `[sandbox: …]` 拒绝标记与提权重试提示，模型手里仍有杠杆）。
+ * @param sandboxPermissions - the raw `sandbox_permissions` argument, if given.
+ * @param justification - the raw `justification` argument, if given.
+ * @returns the usable escalation pair, or `undefined` when nothing was actually requested.
+ */
+export function normalizeEscalationRequest(
+  sandboxPermissions: string | null | undefined,
+  justification: string | null | undefined,
+): { mode: string | undefined; justification: string | undefined } | undefined {
+  const mode = blankToUndefined(sandboxPermissions)
+  const reason = blankToUndefined(justification)
+  // 目标写了词但不在白名单：那是模型为「本次用不到」编的值（`"require"`…），
+  // 整对按未提供处理，调用退回当前策略执行。合法空间封闭而模型能编的词不封闭，只认白名单。
+  if (mode !== undefined && !ESCALATION_TARGETS.includes(mode as SandboxMode)) return undefined
+  // 两个字段都没给（`null`、空串、占位词）＝ 没有提权请求。
+  if (mode === undefined && reason === undefined) return undefined
+  // 到这里说明模型确实表达了提权意图，只是可能漏填了其中一半——原样交回
+  // `validateEscalationArgs` 报错让它补齐，而不是静默降级成一次没有审批依据的调用。
+  return { mode, justification: reason }
+}
+
+/** 二次开发：模型替「本次用不到」的字段填的占位词（与 pi-ai 适配层同口径）。 */
+const PLACEHOLDER_VALUES: readonly string[] = ['null', 'none', 'nil', 'undefined', 'n/a', 'na']
+
+/** 二次开发：`null`、空串、纯空白与占位词在可选字段上语义都是「没填」。 */
+function blankToUndefined(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined
+  const text = value.trim()
+  if (text.length === 0) return undefined
+  return PLACEHOLDER_VALUES.includes(text.toLowerCase()) ? undefined : text
+}
+
+/**
  * The model-facing denial marker — the one vocabulary both enforcing families
  * teach and report, so the model recognizes a policy denial identically
  * whether the kernel refused a bash file effect or the filesystem provider's

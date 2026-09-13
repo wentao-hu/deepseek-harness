@@ -476,7 +476,34 @@ export class ToolArgsError extends HarnessError {
  * @returns Path-qualified violations; empty means valid.
  */
 export function validateArgs(spec: ParameterSchemaSpec, args: unknown): string[] {
-  return validateJsonSchemaValue(parameterSchemaSpecToJsonSchema(spec), args, '')
+  return validateJsonSchemaValue(parameterSchemaSpecToJsonSchema(spec), withoutBlankOptionalArgs(spec, args), '')
+}
+
+/**
+ * 二次开发：摘掉模型给「本次用不到」的可选字段填的空值，再交给值校验。
+ *
+ * 网关 strict 化（强制给函数工具加 `"strict": true`）之后每个属性都进了 `required`，
+ * 模型无法省略用不到的字段，只能填 `null` 或空串。对可选字段而言这两个值就是「未提供」，
+ * 但校验器会按 schema 拒绝它们，报 `must be a string` / `must be one of [...]`，
+ * 模型只能反复重试同一调用。
+ *
+ * 只摘可选字段（`required: true` 上的空值照旧报错，那是真的漏填），且只摘 `null` 与纯空白串：
+ * 字符串 `"null"` 可能是别处的真实内容（例如 `edit` 要替换的字面量 `null`）。
+ * @param spec - declared parameter schema.
+ * @param args - candidate arguments, however malformed.
+ * @returns the arguments with blank optional members removed, or the input unchanged.
+ */
+function withoutBlankOptionalArgs(spec: ParameterSchemaSpec, args: unknown): unknown {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return args
+  const record = args as Record<string, unknown>
+  const isBlank = (key: string, value: unknown): boolean => {
+    const property = spec[key]
+    if (property === undefined || property.required === true) return false
+    return value === null || (typeof value === 'string' && value.trim().length === 0)
+  }
+  const entries = Object.entries(record)
+  const kept = entries.filter(([key, value]) => !isBlank(key, value))
+  return kept.length === entries.length ? args : Object.fromEntries(kept)
 }
 
 /** Options for {@link defineTool}. */
@@ -565,7 +592,9 @@ export function defineTool<const S extends ParameterSchemaSpec, const O extends 
   }
   const parameters = parameterSchemaSpecToJsonSchema(options.parameters)
   const outputSchema = valueSchemaSpecToJsonSchema(options.output.schema)
-  const validate = (args: unknown): string[] => validateJsonSchemaValue(parameters, args, '')
+  // 二次开发：真实工具调用走的是这条闭包（而不是导出的 validateArgs），所以归一化必须
+  // 在这里也接上——否则「模型给可选字段填 null / 空串」照样会拒掉整条调用。
+  const validate = (args: unknown): string[] => validateJsonSchemaValue(parameters, withoutBlankOptionalArgs(options.parameters, args), '')
   const tool: ToolDefinition = {
     name: options.name,
     description: options.description,
