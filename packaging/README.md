@@ -297,7 +297,6 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 
 - **验证**：`node --version` 应输出 v25.9.0；PATH 配好后 pre-push 的 `typecheck` 实测 **7.19 秒通过**，push 正常完成。
 - **⚠️ 不要用 `git push --no-verify` 绕过**：门禁本身没问题，只是环境没配对；跳过等于放弃 typecheck 这道上游质量检查。
-- **另注**：`check-upstream.sh` 第 35 行自带 `export PATH="/opt/homebrew/bin:/usr/local/bin:..."`，所以每周一的上游追踪任务**不受此坑影响**。
 
 ### 坑 19：装一次第三方插件，通知插件就被删、app 直接起不来
 
@@ -334,7 +333,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 4. **恢复 `~/.dsh` 配置**（独立私有仓库 `git@github.com:wentao-hu/.dsh.git`，含密钥，已同步）：
    ```bash
    git clone git@github.com:wentao-hu/.dsh.git ~/.dsh   # ~/.dsh 已存在时照该仓库 README 的「情形 B」处理，勿整目录覆盖
-   bash ~/.dsh/machine/install.sh   # 一并恢复 ~/.zshrc 的 DSH 段与每周一上游追踪任务
+   bash ~/.dsh/machine/install.sh   # 一并恢复 ~/.zshrc 的 DSH 段与 link-skills 脚本
    ```
    仓库内含 `settings.yaml`、`.env`、`.agent-presets/liangshen/`、`machine/`；排除项（`.credentials.yaml`、`profiles/`、`sessions/`、`storages/`、`cache/`）及原因见该仓库 README。配置要点：
    - `~/.dsh/settings.yaml`：`llm-pi-ai.providers.sankuai`（`api: openai-responses`、`baseURL: https://aigc.sankuai.com/agentic/v1`、`apiKeyEnv: SANKUAI_API_KEY`、`contextWindow: 1000000`、`maxTokens: 393216`、`input: [text, image]`、`reasoningEfforts` 映射）+ `agent-default-model` 指向该路由
@@ -376,58 +375,45 @@ bash packaging/build-app.sh
 
 `pi-ai` 版本升级时，`patches/@earendil-works__pi-ai@*.patch` 的文件名带版本号，需按新版本重新生成补丁（`pnpm patch @earendil-works/pi-ai@<新版本>` → 改 `dist/api/openai-responses.js` → `pnpm patch-commit`）；`prepare-dsh.ts` 的传导逻辑按版本号匹配，版本不符会明确跳过并打印提示，不会把补丁打到错误实现上。
 
-## 七、上游自动追踪（每周一）
+## 七、上游自动同步（每周一 12:00，Codex 自动化）
 
-`/Users/steven/Library/Application Support/dsh-sync/check-upstream.sh` 由 launchd 任务
-`com.steven.dsh-upstream-check` 在**每周一 10:17** 自动执行，检查两个对象：
+2026-09-14 起，上游追踪从「launchd 定时写桌面报告」改为 Codex 自动化任务**「DeepSeek Harness 官方更新同步」**（id `deepseek-harness`，定义与运行记忆在 `~/.codex/automations/deepseek-harness/`），**每周一 12:00** 自动执行：
 
-| 追踪对象 | 检查内容 |
+| 环节 | 内容 |
 |---|---|
-| `deepseek-ai/deepseek-harness` | 自上次记录以来的新提交、上游 `package.json` 版本、你的 fork 落后多少 |
-| `@deepseek-harness-tui/dsh-tui` | npm 最新版 与本机已装版本 的差异 |
+| 同步 | `git fetch upstream` → 保留祖先关系的 `git merge upstream/master`；冲突按第三节「改动清单」处理；上游已自行修复的坑就地退役补丁并更新台账 |
+| 验证 | `pnpm run typecheck` + `pnpm run test`（完整单测） |
+| 打包 | `bash packaging/build-app.sh`（含 ad-hoc 签名、安装到 `/Applications`、分发 TUI 共用组件） |
+| 检查 | `codesign --verify`、pi-ai 透传补丁标记、会话内容搜索开关、`dsh --version`、TUI 插件版本（落后时自动升级） |
+| 报告 | 自动化线程输出同步总结表格（新特性/冲突处理/验证结果），完整历史在 `memory.md` |
 
-**行为**：有更新时把报告写到桌面 `DSH上游追踪-YYYYMMDD.md` 并弹系统通知；**无更新时静默退出**，不产生任何打扰。全程走 GitHub API 与 npm registry，不依赖本地仓库状态。
+追踪对象是两个直接上游：官方仓库 `deepseek-ai/deepseek-harness` 与 TUI 插件 `@deepseek-harness-tui/dsh-tui`；第三方桌面壳 `dataelement/dsh-desktop` 不在范围（二开已改为直接包装官方仓库）。
 
-**为什么不追踪 `dataelement/dsh-desktop` 了**：二次开发已从「包装第三方桌面壳」改为「直接包装官方仓库」，它不再是直接上游；按「只追踪直接上游，底层上游由直接上游传导」的原则移出追踪范围。
-
-**为什么脚本放在 Library 而不是项目或桌面**：macOS 的 TCC 禁止 launchd **读取** `~/Desktop`，脚本不能放桌面、也不能操作桌面的 git 仓库；而报告写到桌面是允许的（写入不受限）。
-
-```bash
-# 手动检查（无变化则静默）
-bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh
-# 强制出报告，用于验证链路
-bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force
-```
-
-**换机后重建**：把 `check-upstream.sh` 放回同一路径并 `chmod +x`；把
-`com.steven.dsh-upstream-check.plist` 放进 `~/Library/LaunchAgents/` 后
-`launchctl load -w` 它；首次运行只记基线、不发通知。
-
-⚠️ **写这个脚本时的坑**：`$变量` 后面紧跟中文标点时必须写成 `${变量}`。实测 `${SUB:+$SUB；}` 会让 bash 把全角分号并进变量名，报 `unbound variable: SUB；` 并让整个任务以非零码退出。
+**纪律**：仅当全部验证通过才 `git push origin master`（不 force）；任一门禁失败即安全阻断、保留现场并在报告中写明人工动作；全程不碰 `for_windows` 分支。手动兜底与复核命令见第六节。
 
 ## 八、二开规则（`CLAUDE.local.md`）
 
-仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，写的是本 fork 的两条最高约束（**每周一上游追踪链路必须可用**、**换机后二开功能必须完整可用**）与改功能时的收敛要求。它被上游 `.gitignore` 第 1 行排除、不进 git——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
+仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，写的是本 fork 的两条最高约束（**每周一上游同步链路必须可用**、**换机后二开功能必须完整可用**）与改功能时的收敛要求。它被上游 `.gitignore` 第 1 行排除、不进 git——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
 
 ````markdown
 # 本项目二开规则
 
 本仓库是 `deepseek-ai/deepseek-harness` 的 fork。**与上游保持可同步、且二开成果不丢失，是两条最高约束。**
 
-## 一、每周一自动追踪上游，链路必须保持可用
+## 一、每周一自动同步上游（Codex 自动化，链路必须保持可用）
 
-launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library/Application Support/dsh-sync/check-upstream.sh`，检查上游 `deepseek-ai/deepseek-harness` 的新提交与本 fork 落后多少；有更新则写报告到桌面并弹通知，无更新静默退出。
+Codex 自动化任务**「DeepSeek Harness 官方更新同步」**（id `deepseek-harness`，每周一 12:00）在 `/Users/steven/MyApps/deepseek-harness` 执行：`git fetch upstream` → 保留祖先关系的 `git merge upstream/master` → 按第三节冲突面清单解冲突 → `pnpm run typecheck` + `pnpm run test` → `bash packaging/build-app.sh` 重打包 → 核对 `dsh` / Electron / TUI 并同步 TUI 插件 → 输出同步总结报告；全部通过才 `git push origin master`，任一门禁失败即安全阻断并在报告写明人工动作。定义与运行记忆在 `~/.codex/automations/deepseek-harness/`（随 `~/.codex` 备份仓库换机恢复）。
 
 **做任何功能改动时不得破坏这条链路**：
 
 - 不碰 `.github/workflows/`、根 `scripts/`、`AGENTS.md`（含 `CLAUDE.md` 符号链接，`packages/` 下同）
-- 不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——脚本靠它们算落后量
+- 不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——同步任务靠它们计算落后量并推送
 - 二开规则只写在本文件，不要写进上游的 `AGENTS.md`
-- **自检**：`bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force` 能正常出报告，即为链路完好（脚本走 GitHub API，不依赖本地工作区状态）
+- **自检**：在 Codex 桌面端「自动化」面板手动运行一次该任务；或按 `packaging/README.md` 第六节的手动命令完整走一遍 fetch → merge → 验证 → 打包。
 
 ## 二、换机后二开功能必须完整可用
 
-换新 Mac 时按 `packaging/README.md` 第五节「换机恢复清单」操作（含 `~/.dsh` 私有仓库恢复、每周一追踪任务重建）。**恢复完必须逐项实测二开功能**：
+换新 Mac 时按 `packaging/README.md` 第五节「换机恢复清单」操作（含 `~/.dsh` 私有仓库恢复；每周一上游同步由 Codex 自动化承担，随 `~/.codex` 备份恢复）。**恢复完必须逐项实测二开功能**：
 
 | 二开功能 | 怎么验 |
 |---|---|
@@ -452,7 +438,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 
 ## 四、二开产物位置
 
-- 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
+- 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游同步说明）
 - 桌面端改动：`apps/desktop/`
 - 桌面通知插件：`packaging/desktop-notification/`（插件本体零上游改动；但为让它在 pnpm 操作后自愈，`apps/desktop` 有两个文件被改，见第三节与坑 19）
 
