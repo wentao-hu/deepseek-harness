@@ -120,6 +120,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**09-12 起不再是「零上游文件改动」**——插件必须随 app 内置才能自愈，为此改了 `apps/desktop` 两个文件，见下一行 |
 | `apps/desktop/src/project-manager.ts`、`apps/desktop/src/main.ts`、`apps/desktop/tests/project-manager.spec.ts`、`apps/desktop/tests/plugin-pnpm.spec.ts`、`packaging/build-app.sh` | **本地插件自愈**（坑 19）：profile 清单只接受 registry 精确版本（`projectManifest`），通知插件进不了 `dependencies`，于是每次 `pnpm add/remove/update` 都会把它当多余包清掉，`rebuild` 分支更会直接删掉整个 `node_modules`——之后启动校验报 `missing local plugin dsh-desktop-notification`、app 拒绝启动（09-12 实际发生过一次）。修法沿用上游已有的 `linkDesktopHostPackages` 模式：`build-app.sh` 第 3 步把插件副本内置到 `Contents/Resources/local-plugins/`，`prepareProfile` 在校验前调用新增的 `materializeLocalPlugins` 重新物化，`DesktopRuntimeExecutables` 相应增加必填的 `localPlugins` 字段（`plugin-pnpm.spec.ts` 构造该值时同步补上，漏改会让 pre-push 的 typecheck 直接失败）。**副本绝不能放 `Resources/dsh`**——`verifyDesktopRuntime` 对该目录做全量文件清单比对，多一个文件即判资源被篡改。副作用两条：① 改 `packaging/desktop-notification/` 后**必须重新打包**，只重跑安装脚本会被 app 的内置副本覆盖；② app 只物化文件、不动 `bundles` 登记，所以「禁用第三方插件」仍然有效，换机首次启用仍靠安装脚本登记 |
 | `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见） |
+| `apps/desktop/src/profile-packages.ts`、`apps/desktop/src/project-manager.ts`、`apps/desktop/tests/project-manager.spec.ts` | **link→runtime 迁移兜底**（坑 20）：上游 0.1.6-alpha.1 起宿主包改由 app.asar 内运行时提供（`profileResolution: 'runtime'`），但旧 profile 里 link 模式遗留的软链指向随新包被替换掉的 `Contents/Resources/dsh`，悬空后会让 `validateDesktopPluginGraph` 报 `invalid installed package` 并**直接挡住启动**（09-15 实际发生）。新增 `unlinkBrokenDesktopHostPackages()`——只清理「有归属记录、当前是软链、且链接目标已不存在」的条目，并在 `applyRelease()` 的 early-exit 判断**之前**调用（二次启动时 state 已被改写，只有这一层能兜住）；state 里的 links 记录保留，供降级/后续清理使用 |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
 | `apps/desktop-host/config/desktop.cordis.patch.yml`（新增 1 段） | **开启会话内容全文搜索**：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层是最后应用的最高优先级 patch 且随 app 打包分发，在此覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。选这里而非 profile 的 `cordis.patch.yml`，是因为 profile 目录被 `~/.dsh` 的 `.gitignore` 排除、换机与重置 Desktop 都会丢 |
 | `packages/client/ui-theme/src/styles/claude-desktop.css`（新增）、`packages/client/ui-theme/src/client/styles.ts` | **Claude Desktop 主题（仅浅色）**：新增 fork 专属样式表，并在 `styles.ts` 的 `STYLES` 数组**末尾**挂载——挂载顺序决定层叠，同特异性的声明以本表为准；不改任何上游样式表内容。落地的五项：① 代码字号 11px（代码块）/ 12px（行内）→ **14px / 行高 20px**（09-15 由 15px 下调，对齐 DSH Desktop 侧），改的是 `--dsw-font-markdown-code-block`，它同时被 CodeBlock、TerminalBlock、DiffBlock、ReadBlock 消费，一处覆盖即全局生效；② 代码字体族统一为 Claude 的 `"SF Mono", ui-monospace, Menlo` 栈；③ 标题层级收敛为 22 / 18 / 16px + 600 字重（原 21 / 19 / 18px + 700），仍走 `--dsh-content-font-delta` 跟随字号设置；④ 代码块改白色卡片（8px 圆角 + 1px 浅描边，用 `CodeBlock.tsx` 挂出的稳定全局类 `md-code-block` 命中）；⑤ 语法高亮换 claude.ai 截图像素实测五色（`--shiki-token-*`）。**刻意不动**：正文字号 `--dsh-content-font-size`、正文字体族 `--dsw-font-family`（用户要求「只调整代码字体」）。深色模式（`body[data-ds-dark-theme]`）保持 DSH 原样。参数取自 Claude Desktop 1.52386.6 应用包内的 CDS 令牌（`--cds-*`，`data-density=comfortable`）与 claude.ai 渲染截图实测 |
@@ -321,6 +322,26 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   `desktop-runtime.json` 记录逐项比对，多一个文件就报 `integrity verification failed`。
 - **手动兜底**：`bash packaging/install-desktop-notification.sh`（幂等）只补文件与 `bundles` 登记；
   若 app 已经带内置副本，重启一次即可自愈。
+
+### 坑 20：上游 0.1.6 换 asar 运行时后，旧 profile 的宿主包软链悬空，app 起不来
+
+- **现象（09-15 实际发生）**：打包 0.1.6-alpha.1 后双击 app，弹出启动失败页：
+  `desktop profile: invalid installed package /Users/<用户>/.dsh/profiles/desktop/node_modules/@deepseek-ai/cordis`，
+  并给出「禁用第三方插件 / 重置 Desktop」两个恢复选项。**不要去点「重置」——那会删掉全部 profile 配置与第三方插件。**
+- **根因**：上游 `fa7d5519f5` 起把桌面运行时整体打进 `app.asar`（并新增
+  `profileResolution: 'runtime'`），宿主包不再需要 profile 里的软链。但旧版（link 模式）
+  创建的 241 条软链指向 `Contents/Resources/dsh/node_modules/...`——新版 app 替换后该目录
+  不存在，软链全部悬空；启动走 `applyRelease()` 时，`prepareProfile()` 先写入新 state
+  （**悬空软链此时还没被清**），随后 `validateDesktopPluginGraph()` 扫描 profile 立即抛错。
+  更隐蔽的是：**第一次失败就已经把 state 改写成新 runtimeId**，所以第二次启动会走 early-exit
+  直接跳过校验——不修代码的话表现为「有时能开、有时打不开」的不确定状态。
+- **解法**：见第三节「link→runtime 迁移兜底」一行——`unlinkBrokenDesktopHostPackages()`
+  只删「有归属记录 + 是软链 + 目标不存在」的条目（真实目录或指向别处的软链一律不碰，沿用
+  `refusing to replace unowned package` 守卫），并在 early-exit 之前执行；state 的 links 记录保留。
+- **验证**：修复后重启，`~/.dsh/profiles/desktop/node_modules/@deepseek-ai/` 下悬空软链
+  241 → 0，主进程 + Renderer + `dsh-desktop-host` 后端三个进程都在，启动失败页不再出现。
+- **排查口诀**：这类「profile 校验失败」先看**报错路径本身是不是悬空软链**
+  （`ls -la` 看箭头、`readlink -f` 看目标是否存在），再对照本节第三节的改动清单，别急着用恢复选项。
 
 ## 五、换机恢复清单
 

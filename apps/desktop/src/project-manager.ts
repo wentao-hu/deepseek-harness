@@ -30,7 +30,7 @@ import type { DesktopRelease } from './release.ts'
 import { desktopRuntimeId, readDesktopRuntime, type DesktopRuntimeDescriptor } from './runtime-tree.ts'
 import {
   desktopPluginLockHash, linkDesktopHostPackages, readDesktopProfileState, recordDesktopRuntimeProfile,
-  unlinkDesktopHostPackages, validateDesktopPluginGraph, type DesktopProfileState,
+  unlinkBrokenDesktopHostPackages, unlinkDesktopHostPackages, validateDesktopPluginGraph, type DesktopProfileState,
 } from './profile-packages.ts'
 
 /** Desktop plugin record derived from the installed profile. */
@@ -338,7 +338,11 @@ export class DesktopProjectManager {
       const target = this.readRuntime()
       this.descriptor = target
       const previous = readDesktopProfileState(this.paths.profile)
-      if (!existsSync(this.pendingPackages) && previous?.runtimeId === desktopRuntimeId(target)
+      // 二次开发：runtime 解析模式必须在 early-exit 之前清掉旧 link 模式留下的悬空宿主包软链
+      // （换新版 app 后旧运行时目录消失，软链即失效；二次启动时 state 已被改写，只有这里能兜住）。
+      const migratedLegacyLinks = this.runtime.profileResolution === 'runtime'
+        && unlinkBrokenDesktopHostPackages(this.paths.profile)
+      if (!migratedLegacyLinks && !existsSync(this.pendingPackages) && previous?.runtimeId === desktopRuntimeId(target)
         && previous.lockHash === desktopPluginLockHash(this.paths.profile)
         && (this.runtime.profileResolution === 'runtime' || (previous.links.length === target.sharedPackages.length
           && previous.links.every(link => existsSync(link.target)

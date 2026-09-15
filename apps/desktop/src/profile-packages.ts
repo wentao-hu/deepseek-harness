@@ -100,6 +100,33 @@ export function unlinkDesktopHostPackages(profile: string): void {
 }
 
 /**
+ * Remove recorded host links whose link target no longer exists.
+ *
+ * 二次开发：桌面运行时自 0.1.6-alpha.1 起打进 app.asar，旧版 link 模式 profile 里的宿主包
+ * 软链会指向已被换掉的 `Contents/Resources/dsh`（换新版 app 后必然消失）。runtime 解析模式
+ * 下这些悬空链接已经无用，却会让 {@link validateDesktopPluginGraph} 扫描 profile 时直接报
+ * `invalid installed package` 并阻塞启动。只清理「有归属记录、当前确实是软链、且链接目标已
+ * 不存在」的条目；目标仍在本机（例如并存旧版运行时）或软链指向它处（无归属）时保持原语义。
+ * @param profile - Desktop profile.
+ * @returns Whether any broken link was removed.
+ */
+export function unlinkBrokenDesktopHostPackages(profile: string): boolean {
+  let removed = false
+  for (const link of readDesktopProfileState(profile)?.links ?? []) {
+    const path = join(profile, 'node_modules', link.name)
+    const entry = stat(path)
+    if (entry === undefined) continue
+    if (!entry.isSymbolicLink() || resolve(dirname(path), readlinkSync(path)) !== resolve(link.target)) {
+      throw new Error(`desktop profile: refusing to replace unowned package ${link.name}`)
+    }
+    if (existsSync(path)) continue
+    unlinkSync(path)
+    removed = true
+  }
+  return removed
+}
+
+/**
  * Bind an external profile to this application's real package directories.
  * @param profile - Candidate profile.
  * @param root - Current immutable runtime directory.
