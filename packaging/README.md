@@ -1,6 +1,6 @@
 # DSH 二次开发：打包与使用指南
 
-> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.5-rc.2`（2026-09-10）
+> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.6-alpha.1`（2026-09-15 同步；上游运行时自本版起打进 app.asar）
 > 本文档记录本机二次开发的产物、用法、以及踩过的坑，目的是**以后重打包一条命令搞定、不再重复踩坑**。
 
 ## 一、产物与核心能力
@@ -23,7 +23,7 @@
 ### CLI
 
 ```bash
-dsh --version                       # 0.1.5-rc.2
+dsh --version                       # 0.1.6-alpha.1
 dsh --profile web                   # 启动 Web UI（默认浏览器打开）
 dsh --profile headless "任务描述"    # 一次性执行并打印结果
 ```
@@ -354,8 +354,10 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 6. **打包桌面端**：`bash packaging/build-app.sh`
 7. **验证**：
    ```bash
-   dsh --version                                  # 应为 0.1.5-rc.2
-   grep -c RESPONSES_NATIVE_TOOLS "/Applications/DeepSeek Harness.app/Contents/Resources/dsh/node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js"   # 应为 2
+   dsh --version                                  # 应为 0.1.6-alpha.1
+   # 0.1.6-alpha.1 起上游把桌面运行时整体打进 app.asar（旧的 Contents/Resources/dsh 路径已不存在），
+   # 校验补丁标记要把目标文件从 asar 抽到临时目录再 grep（asar 命令用 npx @electron/asar）：
+   cd "$(mktemp -d)" && npx --yes @electron/asar extract-file "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar" "dsh/node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js" && grep -c RESPONSES_NATIVE_TOOLS openai-responses.js   # 应为 2
    codesign --verify "/Applications/DeepSeek Harness.app" && echo 签名有效
    ```
    最后双击应用发一句「搜索并总结今天的一条主要科技新闻」——能给出当日真实新闻，即代表服务端搜索生效。
@@ -363,7 +365,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    通知链路：首次启动应弹一条「DeepSeek Harness 通知已启用」；切到别的应用后发一条消息，跑完应弹「第 N 回合已完成」。此时「系统设置 → 通知」里能看到本应用。
    profile 由应用首次启动时生成，插件装不进去时隔一层排查：`bash packaging/install-desktop-notification.sh`（幂等，可随时重跑）。
 
-   会话内容搜索（桌面端）：在左侧搜索框输入一个**只出现在某条对话正文、不在任何会话标题里**的词——应列出那条会话并带正文片段。若仍提示「内容搜索暂不可用，仅显示名称匹配」，说明 app 里的 `config/desktop.cordis.patch.yml` 没带上这次改动：`grep -A3 session-query-sqlite "/Applications/DeepSeek Harness.app/Contents/Resources/dsh/node_modules/@deepseek-ai/dsh-desktop-host/config/desktop.cordis.patch.yml"` 应看到 `first-search`。索引落在 `~/.dsh/cache/session-query.sqlite`，删掉即重建。
+   会话内容搜索（桌面端）：在左侧搜索框输入一个**只出现在某条对话正文、不在任何会话标题里**的词——应列出那条会话并带正文片段。若仍提示「内容搜索暂不可用，仅显示名称匹配」，说明 app 里的 `config/desktop.cordis.patch.yml` 没带上这次改动（同样先从 asar 抽出该文件）：`cd "$(mktemp -d)" && npx --yes @electron/asar extract-file "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar" "dsh/node_modules/@deepseek-ai/dsh-desktop-host/config/desktop.cordis.patch.yml" && grep -A3 session-query-sqlite desktop.cordis.patch.yml` 应看到 `first-search`。索引落在 `~/.dsh/cache/session-query.sqlite`，删掉即重建。
 
 ## 六、跟随上游更新
 
@@ -419,7 +421,7 @@ Codex 自动化任务**「DeepSeek Harness 官方更新同步」**（id `deepsee
 
 | 二开功能 | 怎么验 |
 |---|---|
-| CLI 启动器 | `dsh --version` 输出 `0.1.5-rc.2` |
+| CLI 启动器 | `dsh --version` 输出 `0.1.6-alpha.1` |
 | Edit / View / File / Window 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应，`Cmd+W` 能关窗、`Cmd+M` 能最小化（上游自定义菜单把 View / Edit / File / Window 四组 role 全漏了，是本 fork 补的） |
 | 标题栏 | 白色底、无文字（只剩红黄绿按钮）——即使在深色系统下也应是白的（`nativeTheme.themeSource = 'light'`） |
 | 应用图标 | Dock 里不是 Electron 默认图标 |
