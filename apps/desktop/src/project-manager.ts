@@ -29,7 +29,7 @@ import { removeOwnedDirectory } from './owned-directory.ts'
 import type { DesktopRelease } from './release.ts'
 import { desktopRuntimeId, readDesktopRuntime, type DesktopRuntimeDescriptor } from './runtime-tree.ts'
 import {
-  desktopPluginLockHash, linkDesktopHostPackages, readDesktopProfileState,
+  desktopPluginLockHash, linkDesktopHostPackages, readDesktopProfileState, recordDesktopRuntimeProfile,
   unlinkDesktopHostPackages, validateDesktopPluginGraph, type DesktopProfileState,
 } from './profile-packages.ts'
 
@@ -60,6 +60,8 @@ export interface DesktopRuntimeExecutables {
   readonly dsh: string
   /** Directory of plugins the application carries and copies into every profile. */
   readonly localPlugins: string
+  /** How the Host obtains release-owned packages outside the writable profile. */
+  readonly profileResolution?: 'link' | 'runtime'
 }
 
 /** Hooks that stop the backend before profile writes and restart it after success. */
@@ -324,8 +326,10 @@ export class DesktopProjectManager {
   private prepareProfile(projectDir: string): void {
     const runtime = this.currentRuntime()
     materializeLocalPlugins(projectDir, this.runtime.localPlugins)
-    linkDesktopHostPackages(projectDir, this.runtime.dsh, runtime)
-    validateDesktopPluginGraph(projectDir, this.runtime.dsh, runtime, profilePluginNames(projectDir))
+    const resolutionMode = this.runtime.profileResolution ?? 'link'
+    if (resolutionMode === 'runtime') recordDesktopRuntimeProfile(projectDir, runtime)
+    else linkDesktopHostPackages(projectDir, this.runtime.dsh, runtime)
+    validateDesktopPluginGraph(projectDir, this.runtime.dsh, runtime, profilePluginNames(projectDir), resolutionMode)
   }
 
   /** Read release metadata and reconcile its external profile without installing core packages. */
@@ -336,10 +340,10 @@ export class DesktopProjectManager {
       const previous = readDesktopProfileState(this.paths.profile)
       if (!existsSync(this.pendingPackages) && previous?.runtimeId === desktopRuntimeId(target)
         && previous.lockHash === desktopPluginLockHash(this.paths.profile)
-        && previous.links.length === target.sharedPackages.length
-        && previous.links.every(link => existsSync(link.target)
+        && (this.runtime.profileResolution === 'runtime' || (previous.links.length === target.sharedPackages.length
+          && previous.links.every(link => existsSync(link.target)
           && existsSync(join(this.paths.profile, 'node_modules', link.name))
-          && realpathSync.native(link.target) === realpathSync.native(join(this.runtime.dsh, 'node_modules', link.name)))) {
+          && realpathSync.native(link.target) === realpathSync.native(join(this.runtime.dsh, 'node_modules', link.name)))))) {
         return false
       }
       if (previous === undefined) createPluginProfile(this.paths.profile)
@@ -366,11 +370,15 @@ export class DesktopProjectManager {
       }
       const previous = readDesktopProfileState(this.paths.profile)
       const packagesChanged = mutation.type !== 'plugin-toggle'
-      if (packagesChanged) unlinkDesktopHostPackages(this.paths.profile)
+      if (packagesChanged && this.runtime.profileResolution !== 'runtime') unlinkDesktopHostPackages(this.paths.profile)
       try {
         await this.applyMutation(this.paths.profile, mutation)
       } finally {
-        if (packagesChanged) linkDesktopHostPackages(this.paths.profile, this.runtime.dsh, this.currentRuntime())
+        if (packagesChanged) {
+          const runtime = this.currentRuntime()
+          if (this.runtime.profileResolution === 'runtime') recordDesktopRuntimeProfile(this.paths.profile, runtime)
+          else linkDesktopHostPackages(this.paths.profile, this.runtime.dsh, runtime)
+        }
       }
       await this.reconcileProfile(this.paths.profile, previous, packagesChanged)
       await hooks.afterChange()
@@ -384,7 +392,7 @@ export class DesktopProjectManager {
       && (previous.nodeVersion !== target.release.nodeVersion || previous.platform !== target.platform || previous.arch !== target.arch))
     if (rebuild) {
       writeFileSync(this.pendingPackages, '')
-      unlinkDesktopHostPackages(projectDir)
+      if (this.runtime.profileResolution !== 'runtime') unlinkDesktopHostPackages(projectDir)
       removeOwnedDirectory(join(projectDir, 'node_modules'))
       await this.runPnpm(projectDir, ['install', '--frozen-lockfile', '--ignore-scripts'])
     }
