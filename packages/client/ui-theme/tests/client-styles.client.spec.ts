@@ -14,7 +14,7 @@ describe('ui-theme client styles', () => {
   it('mounts every global sheet in dependency order and removes them on dispose', async () => {
     const ctx = new Context()
     const fiber = ctx.plugin({
-      apply(scope) { installThemeStyles(scope) },
+      apply(scope) { installThemeStyles(scope, () => 'default') },
     })
     await fiber.await()
 

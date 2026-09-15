@@ -24,16 +24,16 @@ import { createAppearanceRowStore, createFontSizeRowStore } from './settings-sto
 import { installThemeStyles } from './styles.ts'
 import { en, zh, type ThemeKey } from './locales.ts'
 import {
-  DEFAULT_FONT_SIZE, DEFAULT_PREFERENCE, FONT_SIZE_FIELD, FONT_SIZE_MAX, FONT_SIZE_MIN,
-  isThemePreference, THEME_PREFERENCE_FIELD, THEME_SETTINGS_NAMESPACE,
-  type ThemePreference, type ThemeSettings,
+  DEFAULT_FONT_SIZE, DEFAULT_PREFERENCE, DEFAULT_SKIN, FONT_SIZE_FIELD, FONT_SIZE_MAX, FONT_SIZE_MIN,
+  isThemePreference, isThemeSkin, SKIN_FIELD, THEME_PREFERENCE_FIELD, THEME_SETTINGS_NAMESPACE,
+  type ThemePreference, type ThemeSettings, type ThemeSkin,
 } from '../theme-settings.ts'
 
 export type { AppearanceRowComponentProps, AppearanceRowInjected } from './AppearanceRow.tsx'
 export type { FontSizeRowComponentProps, FontSizeRowInjected } from './FontSizeRow.tsx'
 export type { AppearanceRowState, FontSizeRowState } from './settings-store.ts'
 export type { ThemeKey } from './locales.ts'
-export type { ThemePreference, ThemeSettings } from '../theme-settings.ts'
+export type { ThemePreference, ThemeSettings, ThemeSkin } from '../theme-settings.ts'
 
 /** Namespace owning this feature's settings-row copy. */
 export const SETTINGS_NS = 'settings.theme'
@@ -82,6 +82,8 @@ export interface ThemeSnapshot {
   preference: ThemePreference
   /** Conversation content font size in px (integer within FONT_SIZE_MIN..FONT_SIZE_MAX). */
   fontSize: number
+  /** Selected conversation skin; the fork's Claude sheet mounts only while this is `claude`. */
+  skin: ThemeSkin
   /**
    * The resolved active theme (`system` resolved via prefers-color-scheme)
    * with override layers folded into its tokens (seq order, later layers win
@@ -161,6 +163,7 @@ export class ThemeRuntime {
   private themes: ThemeDefinition[] = [...BUILTIN_THEMES]
   private preference: ThemePreference
   private fontSize: number = bootstrapFontSize()
+  private skin: ThemeSkin = DEFAULT_SKIN
   private revision = 0
   private snapshot: ThemeSnapshot
   private readonly media: MediaQueryList | undefined
@@ -254,13 +257,32 @@ export class ThemeRuntime {
     this.publish()
   }
 
+  /**
+   * Change the conversation skin — the only skin write entry. Accepted values
+   * are written through the settings scope and emit `theme/change`, which is
+   * what mounts or unmounts the fork's skin sheet.
+   * @param skin - one of the declared skins.
+   */
+  setSkin(skin: ThemeSkin): void {
+    if (!isThemeSkin(skin)) throw new Error(`skin "${skin}" is not declared`)
+    if (this.skin === skin) return
+    this.skin = skin
+    void this.host.set(SKIN_FIELD, skin)
+    this.publish()
+  }
+
   /** Adopt the scope's accepted durable preference without writing it back. */
   private adopt(): void {
     const section = this.host.getSnapshot().value
     if (section === undefined) return
-    if (this.preference === section.preference && this.fontSize === section.fontSize) return
+    if (
+      this.preference === section.preference
+      && this.fontSize === section.fontSize
+      && this.skin === section.skin
+    ) return
     this.preference = section.preference
     this.fontSize = section.fontSize
+    this.skin = section.skin
     this.publish()
   }
 
@@ -328,6 +350,7 @@ export class ThemeRuntime {
     return Object.freeze({
       preference: this.preference,
       fontSize: this.fontSize,
+      skin: this.skin,
       active: this.composeActive(active),
       themes: Object.freeze([...this.themes]),
       revision: this.revision,
@@ -426,9 +449,10 @@ export const inject = ['slots', 'locale', 'remote', 'settingsScope']
  * @param ctx - client cordis context.
  */
 export function apply(ctx: ClientContext): void {
-  installThemeStyles(ctx)
   const host = ctx.settingsScope.bind<ThemeSettings>({ namespace: THEME_SETTINGS_NAMESPACE })
   const theme = new ThemeRuntime(ctx, host)
+  // After the runtime exists: the skin sheet reads the persisted skin at mount.
+  installThemeStyles(ctx, () => theme.getTheme().skin)
   ctx.provide('theme', theme)
 
   ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'ui-theme: settings row dictionaries')
@@ -438,7 +462,7 @@ export function apply(ctx: ClientContext): void {
   const fontSizeStore = createFontSizeRowStore()
   let fontSizeBound: BoundActions<typeof fontSizeStore> | undefined
   const sync = (snapshot: ThemeSnapshot): void => {
-    bound?.sync(snapshot.preference, snapshot.revision)
+    bound?.sync(snapshot.preference, snapshot.skin, snapshot.revision)
     fontSizeBound?.sync(snapshot.fontSize, snapshot.revision)
   }
   ctx.on('theme/change', sync)
@@ -449,6 +473,7 @@ export function apply(ctx: ClientContext): void {
     sync(theme.getTheme())
     return {
       setTheme: (id) => { theme.setTheme(id) },
+      setSkin: (skin) => { theme.setSkin(skin) },
     }
   }
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({
