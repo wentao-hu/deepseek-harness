@@ -1,0 +1,91 @@
+/*
+ * Claude Desktop 主题（本 fork 专属样式表）
+ *
+ * 参数来源（非推测）：
+ *   1) Claude Desktop 1.52386.6 应用包内 CDS 设计令牌（--cds-*，取
+ *      data-density=comfortable，即桌面默认密度）：
+ *        正文字号/行高  1rem / 1.5rem      代码字号/行高 13px / 19px
+ *        标题/正文/说明 title 22px、heading 15px、body 14px、caption 12px
+ *        圆角 --cds-radius 8px、正文色 #0b0b0b、次要色 #52514e、弱化色 #898781
+ *        代码字体 --cds-font-mono = "SF Mono", ui-monospace, Menlo, …
+ *   2) claude.ai 渲染截图像素实测：代码块为白色卡片 + 1px 浅描边；
+ *      语法高亮 关键字紫 #7c1ab0、函数/内置蓝 #0f50ad、字符串绿 #197417、
+ *      数字/常量 teal #108080、注释灰 #6d6b67、正文 #0b0b0b。
+ *
+ * 挂载顺序见 client/styles.ts：本表排在 6 张原始样式表之后，因此同特异性的
+ * 声明以本表为准；需要压过 CSS Modules（哈希类名 + !important）的地方用
+ * 元素/全局类选择器 + 更高特异性，不修改任何上游样式表。
+ *
+ * 作用域：仅浅色模式。深色模式（body[data-ds-dark-theme]）保持 DSH 原样。
+ *
+ * 刻意不动：正文字号（--dsh-content-font-size）、正文字体族（--dsw-font-family）
+ * —— 中文正文保持 DSH 默认观感，用户要求"只调整代码字体"。
+ */
+
+body:not([data-ds-dark-theme]) {
+  /* ---------- 代码：15px（代码块 / 终端块 / diff 块 / read 块同源变量） ---------- */
+  --ds-font-family-code: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    'Liberation Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+
+  --dsw-font-markdown-code: 15px / 24px var(--ds-font-family-code);
+  --dsw-font-markdown-code-font-family: var(--ds-font-family-code);
+  --dsw-font-markdown-code-font-size: 15px;
+  --dsw-font-markdown-code-line-height: 24px;
+
+  --dsw-font-markdown-code-block: 15px / 24px var(--ds-font-family-code);
+  --dsw-font-markdown-code-block-font-family: var(--ds-font-family-code);
+  --dsw-font-markdown-code-block-font-size: 15px;
+  --dsw-font-markdown-code-block-line-height: 24px;
+
+  /* ---------- 标题：Claude 层级（正文 14px 下 19 / 16 / 14，字重 600） ---------- */
+  --dsw-font-markdown-h1: 600 calc(19px + var(--dsh-content-font-delta)) / calc(26px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h1-font-weight: 600;
+  --dsw-font-markdown-h1-font-size: calc(19px + var(--dsh-content-font-delta));
+  --dsw-font-markdown-h1-line-height: calc(26px + var(--dsh-content-font-delta));
+
+  --dsw-font-markdown-h2: 600 calc(16px + var(--dsh-content-font-delta)) / calc(24px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h2-font-weight: 600;
+  --dsw-font-markdown-h2-font-size: calc(16px + var(--dsh-content-font-delta));
+  --dsw-font-markdown-h2-line-height: calc(24px + var(--dsh-content-font-delta));
+
+  --dsw-font-markdown-h3: 600 calc(14px + var(--dsh-content-font-delta)) / calc(22px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h3-font-weight: 600;
+  --dsw-font-markdown-h3-font-size: calc(14px + var(--dsh-content-font-delta));
+  --dsw-font-markdown-h3-line-height: calc(22px + var(--dsh-content-font-delta));
+
+  --dsw-font-markdown-h4: 600 var(--dsh-content-font-size, 14px) / calc(22px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h4-font-weight: 600;
+  --dsw-font-markdown-h4-line-height: calc(22px + var(--dsh-content-font-delta));
+
+  /* ---------- 代码块 / 行内代码配色：Claude 的白色卡片 ---------- */
+  --dsw-alias-markdown-code-block: #ffffff;
+  --dsw-alias-markdown-code-block-banner: #ffffff;
+  --dsw-alias-markdown-inline-code: rgb(11 11 11 / 5%);
+
+  /* ---------- 语法高亮：claude.ai 截图实测五色 ---------- */
+  --shiki-foreground: #0b0b0b;
+  --shiki-token-keyword: #7c1ab0;
+  --shiki-token-function: #0f50ad;
+  --shiki-token-string: #197417;
+  --shiki-token-string-expression: #197417;
+  --shiki-token-constant: #108080;
+  --shiki-token-comment: #6d6b67;
+  --shiki-token-parameter: #0b0b0b;
+  --shiki-token-punctuation: #3d3d3a;
+  --shiki-token-link: #0f50ad;
+}
+
+/* 代码块外壳：8px 圆角 + 1px 浅描边（Claude 截图）。.md-code-block 是
+   CodeBlock.tsx 挂出的稳定全局类名，不依赖 CSS Modules 的哈希类。 */
+body:not([data-ds-dark-theme]) .md-code-block {
+  border: 1px solid rgb(11 11 11 / 10%);
+  border-radius: 8px;
+}
+
+/* 行内代码：去掉 0.5px 描边、字号提到 15px。
+   压过 .markdown :not(pre) > code 的 0.875em !important 需要更高特异性。 */
+body:not([data-ds-dark-theme]) :not(pre) > code {
+  font-size: 15px !important;
+  border-color: transparent;
+  border-radius: 4px;
+}

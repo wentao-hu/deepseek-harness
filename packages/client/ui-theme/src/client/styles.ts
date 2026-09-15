@@ -5,6 +5,7 @@ import designPlatform from '../styles/design-platform.css?inline'
 import scrollbar from '../styles/scrollbar.css?inline'
 import gradientShadowText from '../styles/gradient-shadow-text.css?inline'
 import shiki from '../styles/shiki.css?inline'
+import claudeDesktop from '../styles/claude-desktop.css?inline'
 
 const PLUGIN_ID = '@deepseek-ai/dsh-client-ui-theme'
 
@@ -15,6 +16,8 @@ const STYLES = [
   ['scrollbar.css', scrollbar],
   ['gradient-shadow-text.css', gradientShadowText],
   ['shiki.css', shiki],
+  // 本 fork 新增：Claude Desktop 主题。排在最后 → 同特异性声明以本表为准（仅浅色）
+  ['claude-desktop.css', claudeDesktop],
 ] as const
 
 /**
