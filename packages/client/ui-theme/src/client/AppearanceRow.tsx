@@ -4,22 +4,27 @@
  * Registered by this package — the theme feature owns its own settings
  * surface. Selection follows the persisted preference, never the resolved
  * active theme.
+ *
+ * Fork addition: a second group switches the conversation skin between the
+ * stock look and the Claude Desktop theme.
  */
 import clsx from 'clsx'
 import {
   IconDarkOutline16, IconFollowsystemOutline16, IconLightOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ThemePreference } from '../theme-settings.ts'
+import type { ThemePreference, ThemeSkin } from '../theme-settings.ts'
 import type { ThemeKey } from './locales.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { createAppearanceRowStore } from './settings-store.ts'
 import css from './AppearanceRow.module.css'
 
-/** Injected business face: the preference write (t rides the standard locale seat). */
+/** Injected business face: the preference and skin writes (t rides the standard locale seat). */
 export interface AppearanceRowInjected {
   /** Switch the theme preference. */
   setTheme: (id: ThemePreference) => void
+  /** Switch the conversation skin (fork addition). */
+  setSkin: (id: ThemeSkin) => void
 }
 
 /** Full component props: runtime share + store share + locale seat + injected face. */
@@ -34,13 +39,20 @@ const CUBES: readonly { id: ThemePreference; labelKey: ThemeKey; Icon: typeof Ic
   { id: 'system', labelKey: 'appearance.system', Icon: IconFollowsystemOutline16 },
 ]
 
+/** Conversation skins in declaration order (fork addition). */
+const SKINS: readonly { id: ThemeSkin; labelKey: ThemeKey }[] = [
+  { id: 'default', labelKey: 'skin.default' },
+  { id: 'claude', labelKey: 'skin.claude' },
+]
+
 /**
  * Render the Appearance row.
  * @param props - composed slot props.
  * @returns the row element tree.
  */
-export function AppearanceRow({ t, setTheme, useStore }: AppearanceRowComponentProps) {
+export function AppearanceRow({ t, setTheme, setSkin, useStore }: AppearanceRowComponentProps) {
   const preference = useStore(s => s.preference)
+  const skin = useStore(s => s.skin)
   return (
     <div className={css.group}>
       <div className={css.title}>{t('appearance.title')}</div>
@@ -54,6 +66,20 @@ export function AppearanceRow({ t, setTheme, useStore }: AppearanceRowComponentP
             onClick={() => { setTheme(id) }}
           >
             <Icon />
+            {t(labelKey)}
+          </button>
+        ))}
+      </div>
+      <div className={css.title}>{t('skin.title')}</div>
+      <div className={css.cubeRow}>
+        {SKINS.map(({ id, labelKey }) => (
+          <button
+            key={id}
+            type="button"
+            className={clsx(css.themeCube, skin === id && css.selected)}
+            aria-pressed={skin === id}
+            onClick={() => { setSkin(id) }}
+          >
             {t(labelKey)}
           </button>
         ))}

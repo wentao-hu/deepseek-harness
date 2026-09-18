@@ -30,7 +30,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, approveEscalation, normalizeEscalationRequest, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { parseExitStatus } from '@deepseek-ai/dsh-shell'
@@ -95,7 +95,12 @@ function validatePwshArgs(args: PwshToolArgs): void {
   }
   // The escalation pairing (sandbox_permissions ⇔ justification, non-empty) is
   // the shared rule both enforcing families validate identically.
-  validateEscalationArgs(args.sandbox_permissions, args.justification)
+  // 二次开发（Windows 适配）：与 tool-bash 同口径——先归一化再校验。模型为「用不到」填的
+  // `null` / 空串 / 枚举外自造词一律按「未请求提权」处理，否则 `null.trim()` 会在这里崩，
+  // 或者把一条本可执行的调用换成校验报错。上游只改了 tool-bash，本侧 pwsh 工具是 Windows
+  // 上的主力 shell，必须同步。
+  const escalation = normalizeEscalationRequest(args.sandbox_permissions, args.justification)
+  validateEscalationArgs(escalation?.mode, escalation?.justification)
 }
 /* jscpd:ignore-end */
 
@@ -347,9 +352,12 @@ export function apply(ctx: Context, config: Config = {}): void {
       validatePwshArgs(args)
       // Description is display metadata; workdir defaults to the caller's session.
       const standingPolicy = resolveSandboxPolicy(exec)
-      const approvedMode = args.sandbox_permissions !== undefined && args.justification !== undefined
-        ? await approvePwshEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
-        : undefined
+      // 二次开发（Windows 适配）：同 validatePwshArgs——只有归一化后仍然成对且落在枚举内的
+      // 请求才驱动审批，「模型给用不到的字段填了占位值」不再等于「整条调用作废」。
+      const escalation = normalizeEscalationRequest(args.sandbox_permissions, args.justification)
+      const approvedMode = escalation === undefined || escalation.mode === undefined || escalation.justification === undefined
+        ? undefined
+        : await approvePwshEscalation(escalation.mode, escalation.justification, exec, standingPolicy)
       const policy = approvedMode === undefined
         ? standingPolicy
         : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }

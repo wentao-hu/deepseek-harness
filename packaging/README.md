@@ -65,6 +65,8 @@ ln -sf "$(pwd)/packaging/dsh-tui" ~/.local/bin/dsh-tui
 
 **完成通知**：任务跑完且窗口不在前台时弹 macOS 原生通知（标题为会话标题，正文形如「第 3 回合已完成」）。由 `packaging/desktop-notification/` 插件提供，`build-app.sh` 打包后自动装入 profile —— 首次加载会弹一条「通知已启用」确认，macOS 正是靠这次成功发送把应用登记进「系统设置 → 通知」（见坑 12）。
 
+**状态栏图标**：菜单栏里是「官方鲸鱼 + 插件轨道圆环 + 四个节点」的模板图（不是单纯金鱼/鲸鱼，避免与其它应用撞脸），点击图标会激活主窗口；窗口已用 `Cmd+W` 关掉时会重建。macOS 用模板图跟随菜单栏明暗自动反色；Windows / Linux 用彩色后备图。`Cmd+W` 关掉最后一个窗口后进程常驻后台，只有 `Cmd+Q` / 菜单「退出」才结束进程。
+
 ⚠️ **不要从已注入 `DSH_HOME` 的终端里直接运行它的可执行文件**（见坑 6）。从 Finder/Dock 启动不受影响。
 
 ### 重新打包（一条命令）
@@ -87,8 +89,11 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 
 脚本渲染出各档 PNG 后分流：macOS 打成 `icon.icns`，同时所有平台都导出 `icon.png`（Linux 与运行时窗口图标）和 `icon.ico`（Windows）；中间目录 `icon.iconset` 用完即删。
 
+**状态栏图标**（新增）：源文件是 `assets/tray.svg`（macOS 模板图，纯黑 + alpha）和 `assets/tray-color.svg`（Windows / Linux 彩色后备图），同样由 `build:icons` 生成 `trayTemplate.png` / `trayTemplate@2x.png` 与 `trayColor.png` / `trayColor@2x.png`（18pt + 36px Retina）。四个源/产物都入库；app 运行时从 `asar` 内的 `assets/` 读取，`electron-builder.config.mjs` 的 `files` 已显式加入 `assets/tray*.png`。
+
 - `icon.icns`（约 1.4MB）是打包必需资源，直接入库。偏大的原因是图标是大面积渐变 + 抗锯齿边缘，PNG 压缩率天然低；本机没有 pngcrush/optipng 之类的无损压缩工具，实测 `sips` 重编码无效果（反而略增）。
 - 图标 SVG 带 alpha，**不能用 `sips`/`qlmanage` 转 PNG**——它们会把圆角外的透明压成白底，Dock 里就是白方块。`build-icons.mjs` 走 Electron 的 Chromium 离屏渲染来保留 alpha。
+- `build-icons.mjs` 现在把应用图标和状态栏图标排进**同一张离屏页面**，只创建一次 `BrowserWindow`、只截一次图，再用 `NativeImage.crop` 按区域裁切——实测同一进程里创建第二个离屏窗口会 `ERR_FAILED`。
 
 ### Windows（`for_windows` 分支）
 
@@ -159,14 +164,15 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `packages/sandbox/sandbox/src/escalation.ts`、`packages/sandbox/sandbox/tests/escalation.spec.ts`、`packages/shell/tool-bash/tests/tools.spec.ts`、`packages/shell/tool-pwsh/tests/tools.spec.ts` | **新增**（坑 14）：`approveEscalation` 在请求模式**等于**当前模式时直接放行，不再抛 `not strictly wider`。同族两个测试文件把「相等即报错」的用例换成真正的更窄场景 |
 | `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
 | `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
-| `apps/desktop/electron-builder.config.mjs` | **3 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标）。Windows 指向 `assets/icon.ico`，尺寸档位与 alpha 均可控 |
+| `apps/desktop/electron-builder.config.mjs` | **6 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标）。Windows 指向 `assets/icon.ico`，尺寸档位与 alpha 均可控；`files` 增加 `assets/tray*.png`，让状态栏图标随 asar 一起分发 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 View 菜单**：绑定系统缩放 role（`resetZoom`/`zoomIn`/`zoomOut`）。上游用自定义菜单整体替换了 Electron 默认菜单却未补 View 菜单，导致 `Cmd +/-/0` 完全无响应。菜单文案走 locale 字典 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 Edit 菜单**：绑定系统剪贴板 role（`undo`/`redo`/`cut`/`copy`/`paste`/`selectAll`）。与上面 View 菜单同一根因——上游自定义菜单整体替换了默认菜单却未补 Edit 菜单，macOS 上 `Cmd+C/V/X/A/Z` 因此全部无响应。菜单文案走 locale 字典 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 File 与 Window 菜单**（坑 15）：File 绑 `close`（`Cmd+W` 关窗）、Window 用系统 `windowMenu`（`Cmd+M` 最小化 / Zoom）。这是同一根因的第三、四次——上游自定义菜单替换默认菜单后，View / Edit / File / Window **四组 role 全部缺失**。`Cmd+W` 可用也是「关窗不退出」体验的前提：关窗后后端仍在跑，点 Dock 重开是秒开 |
 | `apps/desktop/src/main.ts` | **标题栏变白**（坑 16）：`nativeTheme.themeSource = 'light'` 强制应用使用浅色外观，macOS 原生标题栏随之由深灰变为白色。做法借鉴 `~/MyApps/DSChat` |
 | `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **标题栏文字留空**（坑 16）：窗口标题不再跟随页面 `document.title`——harness 把当前对话名写进 `<title>`，标题栏会多出一行与界面内对话标题重复的小字。做法是 `title: ''` + 监听 `page-title-updated` 阻止改写，**布局不变**（不用 `titleBarStyle`，那会改布局） |
-| `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` 产物 |
-| `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 各档 PNG → `icon.icns`（mac）/ `icon.ico`（Windows，见坑 14）的生成脚本；接在 `build:icons` |
+| `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **状态栏图标常驻**：主进程创建 `Tray` 并保持模块级引用；点击图标调用 `focusPrimaryWindow`，窗口已被 `Cmd+W` 关掉时重建；macOS 用 `trayTemplate.png` 并 `setTemplateImage(true)`，其他平台用 `trayColor.png`。`window-all-closed` 在有图标时不再退出，`will-quit` 销毁图标。窗口 `Cmd+W` 关闭后后端继续跑，点图标秒回 |
+| `apps/desktop/assets/`（新增目录） | 应用图标：`icon.svg` 源文件 + `icon.icns` / `icon.png` / `icon.ico` 产物（`.ico` 为 Windows 打包与窗口图标，见坑 14）；状态栏图标：`tray.svg` / `tray-color.svg` 源文件 + `trayTemplate.png` / `trayTemplate@2x.png` / `trayColor.png` / `trayColor@2x.png` 产物 |
+| `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns`（仅 darwin）；同一张离屏页面里追加渲染两个状态栏 SVG，裁切并降采样出 18pt / @2x 两档。非 darwin 跳过 icns（`iconutil` 不存在）并额外产出 `icon.ico`（Windows，见坑 14）。接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
 | `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 与 `apps/desktop-host/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本**。`apps/desktop-host` 是 09-12 补进判据的——它是 `RELEASE_PACKAGES` 之一、内容经 tarball 分发，漏比会让它的改动被快捷路径静默丢弃（见坑 17 末条） |
 | `packaging/sync-shared-components.sh`（新增）、`packaging/build-app.sh` | **共用组件分发到 TUI**：两个前端共用同一批注入组件（如 `skill-search.mjs`），但运行副本各自独立——Electron 那份由打包第 1 步组装进 app（直接改 app 内文件会破坏 ad-hoc 签名，所以不在此处理），TUI 那份在 `~/.dsh/.agent-presets/liangshen/`、改仓库源码不会自动更新。本脚本把权威源 `packages/preset/agent-presets/presets/standard/` 下的共用组件同步过去：幂等（内容相同即跳过）、目标目录不存在（换机后 TUI 未装）则跳过并提示。`build-app.sh` 的 [6/6] 步自动调用，也可单独跑。**不进换机恢复清单**——属辅助步骤，缺失不影响二开功能 |
@@ -178,6 +184,8 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `apps/desktop/assets/icon.ico`（新增） | Windows 图标：16/24/32/48/64/128/256 共 7 档，PNG 内嵌、保留 alpha |
 | `packaging/build-app.ps1`、`packaging/dsh.cmd`、`packaging/dsh-tui.cmd`（新增） | Windows 一键打包脚本与命令行启动器（对应 mac 侧 `build-app.sh` / `dsh` / `dsh-tui`） |
 | `apps/desktop-host/config/desktop.cordis.patch.yml`（新增 1 段） | **开启会话内容全文搜索**：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层是最后应用的最高优先级 patch 且随 app 打包分发，在此覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。选这里而非 profile 的 `cordis.patch.yml`，是因为 profile 目录被 `~/.dsh` 的 `.gitignore` 排除、换机与重置 Desktop 都会丢 |
+| `packages/client/ui-theme/src/styles/claude-desktop.css`（新增）、`packages/client/ui-theme/src/client/styles.ts` | **Claude Desktop 主题（仅浅色）**：新增 fork 专属样式表，并在 `styles.ts` 的 `STYLES` 数组**末尾**挂载——挂载顺序决定层叠，同特异性的声明以本表为准；不改任何上游样式表内容。落地的五项：① 代码字号 11px（代码块）/ 12px（行内）→ **14px / 行高 20px**（09-15 由 15px 下调，对齐 DSH Desktop 侧），改的是 `--dsw-font-markdown-code-block`，它同时被 CodeBlock、TerminalBlock、DiffBlock、ReadBlock 消费，一处覆盖即全局生效；② 代码字体族统一为 Claude 的 `"SF Mono", ui-monospace, Menlo` 栈；③ 标题层级收敛为 22 / 18 / 16px + 600 字重（原 21 / 19 / 18px + 700），仍走 `--dsh-content-font-delta` 跟随字号设置；④ 代码块改白色卡片（8px 圆角 + 1px 浅描边，用 `CodeBlock.tsx` 挂出的稳定全局类 `md-code-block` 命中）；⑤ 语法高亮换 claude.ai 截图像素实测五色（`--shiki-token-*`）。**刻意不动**：正文字号 `--dsh-content-font-size`、正文字体族 `--dsw-font-family`（用户要求「只调整代码字体」）。深色模式（`body[data-ds-dark-theme]`）保持 DSH 原样。参数取自 Claude Desktop 1.52386.6 应用包内的 CDS 令牌（`--cds-*`，`data-density=comfortable`）与 claude.ai 渲染截图实测 |
+| `packages/client/ui-theme/src/theme-settings.ts`、`src/client/index.ts`、`src/client/settings-store.ts`、`src/client/AppearanceRow.tsx`、`src/client/locales.ts` | **主题皮肤开关**（09-15）：`ui-theme` 的持久化设置新增 `skin` 字段（`'default' \| 'claude'`，缺该字段的旧设置文档解析为 `default`）；外观设置行多一组「主题皮肤」按钮；`styles.ts` 的皮肤表随它挂载/卸载，切回「默认」即恢复 DSH 原生外观。**主题 CSS 与 DSH Desktop 侧是同一份文件、逐字一致（sha256 相同），同步方式＝`cp` 覆盖**。连带改动：`installThemeStyles` 多收一个 `readSkin` 参数，调用点从 `apply()` 开头移到 `ThemeRuntime` 创建之后——皮肤表要在挂载时读到已持久化的 skin |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
 
 ## 四、踩坑记录
@@ -352,7 +360,6 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 
 - **验证**：`node --version` 应输出 v25.9.0；PATH 配好后 pre-push 的 `typecheck` 实测 **7.19 秒通过**，push 正常完成。
 - **⚠️ 不要用 `git push --no-verify` 绕过**：门禁本身没问题，只是环境没配对；跳过等于放弃 typecheck 这道上游质量检查。
-- **另注**：`check-upstream.sh` 第 35 行自带 `export PATH="/opt/homebrew/bin:/usr/local/bin:..."`，所以每周一的上游追踪任务**不受此坑影响**。
 
 ### 坑 19：装一次第三方插件，通知插件就被删、app 直接起不来
 
@@ -462,7 +469,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 4. **恢复 `~/.dsh` 配置**（独立私有仓库 `git@github.com:wentao-hu/.dsh.git`，含密钥，已同步）：
    ```bash
    git clone git@github.com:wentao-hu/.dsh.git ~/.dsh   # ~/.dsh 已存在时照该仓库 README 的「情形 B」处理，勿整目录覆盖
-   bash ~/.dsh/machine/install.sh   # 一并恢复 ~/.zshrc 的 DSH 段与每周一上游追踪任务
+   bash ~/.dsh/machine/install.sh   # 一并恢复 ~/.zshrc 的 DSH 段与 link-skills 脚本
    ```
    仓库内含 `settings.yaml`、`.env`、`.agent-presets/liangshen/`、`machine/`；排除项（`.credentials.yaml`、`profiles/`、`sessions/`、`storages/`、`cache/`）及原因见该仓库 README。配置要点：
    - `~/.dsh/settings.yaml`：`llm-pi-ai.providers.sankuai`（`api: openai-responses`、`baseURL: https://aigc.sankuai.com/agentic/v1`、`apiKeyEnv: SANKUAI_API_KEY`、`contextWindow: 1000000`、`maxTokens: 393216`、`input: [text, image]`、`reasoningEfforts` 映射）+ `agent-default-model` 指向该路由
@@ -537,58 +544,45 @@ bash packaging/build-app.sh
 
 `pi-ai` 版本升级时，`patches/@earendil-works__pi-ai@*.patch` 的文件名带版本号，需按新版本重新生成补丁（`pnpm patch @earendil-works/pi-ai@<新版本>` → 改 `dist/api/openai-responses.js` → `pnpm patch-commit`）；`prepare-dsh.ts` 的传导逻辑按版本号匹配，版本不符会明确跳过并打印提示，不会把补丁打到错误实现上。
 
-## 七、上游自动追踪（每周一）
+## 七、上游自动同步（每周一 12:00，Codex 自动化）
 
-`/Users/steven/Library/Application Support/dsh-sync/check-upstream.sh` 由 launchd 任务
-`com.steven.dsh-upstream-check` 在**每周一 10:17** 自动执行，检查两个对象：
+2026-09-14 起，上游追踪从「launchd 定时写桌面报告」改为 Codex 自动化任务**「DeepSeek Harness 官方更新同步」**（id `deepseek-harness`，定义与运行记忆在 `~/.codex/automations/deepseek-harness/`），**每周一 12:00** 自动执行：
 
-| 追踪对象 | 检查内容 |
+| 环节 | 内容 |
 |---|---|
-| `deepseek-ai/deepseek-harness` | 自上次记录以来的新提交、上游 `package.json` 版本、你的 fork 落后多少 |
-| `@deepseek-harness-tui/dsh-tui` | npm 最新版 与本机已装版本 的差异 |
+| 同步 | `git fetch upstream` → 保留祖先关系的 `git merge upstream/master`；冲突按第三节「改动清单」处理；上游已自行修复的坑就地退役补丁并更新台账 |
+| 验证 | `pnpm run typecheck` + `pnpm run test`（完整单测） |
+| 打包 | `bash packaging/build-app.sh`（含 ad-hoc 签名、安装到 `/Applications`、分发 TUI 共用组件） |
+| 检查 | `codesign --verify`、pi-ai 透传补丁标记、会话内容搜索开关、`dsh --version`、TUI 插件版本（落后时自动升级） |
+| 报告 | 自动化线程输出同步总结表格（新特性/冲突处理/验证结果），完整历史在 `memory.md` |
 
-**行为**：有更新时把报告写到桌面 `DSH上游追踪-YYYYMMDD.md` 并弹系统通知；**无更新时静默退出**，不产生任何打扰。全程走 GitHub API 与 npm registry，不依赖本地仓库状态。
+追踪对象是两个直接上游：官方仓库 `deepseek-ai/deepseek-harness` 与 TUI 插件 `@deepseek-harness-tui/dsh-tui`；第三方桌面壳 `dataelement/dsh-desktop` 不在范围（二开已改为直接包装官方仓库）。
 
-**为什么不追踪 `dataelement/dsh-desktop` 了**：二次开发已从「包装第三方桌面壳」改为「直接包装官方仓库」，它不再是直接上游；按「只追踪直接上游，底层上游由直接上游传导」的原则移出追踪范围。
-
-**为什么脚本放在 Library 而不是项目或桌面**：macOS 的 TCC 禁止 launchd **读取** `~/Desktop`，脚本不能放桌面、也不能操作桌面的 git 仓库；而报告写到桌面是允许的（写入不受限）。
-
-```bash
-# 手动检查（无变化则静默）
-bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh
-# 强制出报告，用于验证链路
-bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force
-```
-
-**换机后重建**：把 `check-upstream.sh` 放回同一路径并 `chmod +x`；把
-`com.steven.dsh-upstream-check.plist` 放进 `~/Library/LaunchAgents/` 后
-`launchctl load -w` 它；首次运行只记基线、不发通知。
-
-⚠️ **写这个脚本时的坑**：`$变量` 后面紧跟中文标点时必须写成 `${变量}`。实测 `${SUB:+$SUB；}` 会让 bash 把全角分号并进变量名，报 `unbound variable: SUB；` 并让整个任务以非零码退出。
+**纪律**：仅当全部验证通过才 `git push origin master`（不 force）；任一门禁失败即安全阻断、保留现场并在报告中写明人工动作；全程不碰 `for_windows` 分支。手动兜底与复核命令见第六节。
 
 ## 八、二开规则（`CLAUDE.local.md`）
 
-仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，写的是本 fork 的两条最高约束（**每周一上游追踪链路必须可用**、**换机后二开功能必须完整可用**）与改功能时的收敛要求。它被上游 `.gitignore` 第 1 行排除、不进 git——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
+仓库根 `CLAUDE.local.md` 是 Claude Code 每次会话自动加载的项目规则，写的是本 fork 的两条最高约束（**每周一上游同步链路必须可用**、**换机后二开功能必须完整可用**）与改功能时的收敛要求。它被上游 `.gitignore` 第 1 行排除、不进 git——换机后按下方全文重建（`cat > CLAUDE.local.md` 粘贴即可），规则改了就同步改本节的副本。
 
 ````markdown
 # 本项目二开规则
 
 本仓库是 `deepseek-ai/deepseek-harness` 的 fork。**与上游保持可同步、且二开成果不丢失，是两条最高约束。**
 
-## 一、每周一自动追踪上游，链路必须保持可用
+## 一、每周一自动同步上游（Codex 自动化，链路必须保持可用）
 
-launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library/Application Support/dsh-sync/check-upstream.sh`，检查上游 `deepseek-ai/deepseek-harness` 的新提交与本 fork 落后多少；有更新则写报告到桌面并弹通知，无更新静默退出。
+Codex 自动化任务**「DeepSeek Harness 官方更新同步」**（id `deepseek-harness`，每周一 12:00）在 `/Users/steven/MyApps/deepseek-harness` 执行：`git fetch upstream` → 保留祖先关系的 `git merge upstream/master` → 按第三节冲突面清单解冲突 → `pnpm run typecheck` + `pnpm run test` → `bash packaging/build-app.sh` 重打包 → 核对 `dsh` / Electron / TUI 并同步 TUI 插件 → 输出同步总结报告；全部通过才 `git push origin master`，任一门禁失败即安全阻断并在报告写明人工动作。定义与运行记忆在 `~/.codex/automations/deepseek-harness/`（随 `~/.codex` 备份仓库换机恢复）。
 
 **做任何功能改动时不得破坏这条链路**：
 
 - 不碰 `.github/workflows/`、根 `scripts/`、`AGENTS.md`（含 `CLAUDE.md` 符号链接，`packages/` 下同）
-- 不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——脚本靠它们算落后量
+- 不 `--force` 重写 `master`，不改 `origin` / `upstream` 指向——同步任务靠它们计算落后量并推送
 - 二开规则只写在本文件，不要写进上游的 `AGENTS.md`
-- **自检**：`bash ~/Library/Application\ Support/dsh-sync/check-upstream.sh --force` 能正常出报告，即为链路完好（脚本走 GitHub API，不依赖本地工作区状态）
+- **自检**：在 Codex 桌面端「自动化」面板手动运行一次该任务；或按 `packaging/README.md` 第六节的手动命令完整走一遍 fetch → merge → 验证 → 打包。
 
 ## 二、换机后二开功能必须完整可用
 
-换新 Mac 时按 `packaging/README.md` 第五节「换机恢复清单」操作（含 `~/.dsh` 私有仓库恢复、每周一追踪任务重建）。**恢复完必须逐项实测二开功能**：
+换新 Mac 时按 `packaging/README.md` 第五节「换机恢复清单」操作（含 `~/.dsh` 私有仓库恢复；每周一上游同步由 Codex 自动化承担，随 `~/.codex` 备份恢复）。**恢复完必须逐项实测二开功能**：
 
 | 二开功能 | 怎么验 |
 |---|---|
@@ -596,12 +590,14 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 | Edit / View / File / Window 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应，`Cmd+W` 能关窗、`Cmd+M` 能最小化（上游自定义菜单把 View / Edit / File / Window 四组 role 全漏了，是本 fork 补的） |
 | 标题栏 | 白色底、无文字（只剩红黄绿按钮）——即使在深色系统下也应是白的（`nativeTheme.themeSource = 'light'`） |
 | 应用图标 | Dock 里不是 Electron 默认图标 |
+| 状态栏图标 | 菜单栏出现「鲸鱼 + 圆环 + 四节点」图标，点击能唤起主窗口；`Cmd+W` 关窗后图标仍在，再点能重建窗口 |
 | 桌面完成通知 | 窗口失焦时跑完一回合，弹「第 N 回合已完成」 |
 | 服务端原生搜索 | app 里问「今天的一条科技新闻」，能给出当日真实新闻 |
 | 会话内容搜索 | 左侧搜索框搜一个**只出现在对话正文、不在任何会话标题里**的词，应列出该会话并带正文片段（上游默认 `openAt: never` 关闭，本 fork 在 `apps/desktop-host/config/desktop.cordis.patch.yml` 开启，随 app 打包分发故换机自动恢复） |
 | 沙箱提权放行 | 模型把提权字段填成当前模式时不再报 `not strictly wider` |
 | 提权占位词剔除（坑 10） | 让模型跑任意 bash 命令，stderr 出现 `dsh: dropped blank tool arguments for bash: sandbox_permissions, …`，且该命令在会话日志里 `tool/call` 只计 1 次（不是 2~3 次重试） |
 | 403 错误分类 | 网关返 403 时显示 `FORBIDDEN` 而非 `AUTH` |
+| 主题皮肤切换 | 设置 → 通用 → 外观 →「主题皮肤」：选 Claude 后窗口转暖白、代码块白色卡片、代码 14px / 行高 20px、标题 22 / 18 / 16、链接深墨蓝；切回「默认」立即恢复 DSH 原生外观。选择持久化在 `~/.dsh/settings.yaml` 的 `ui-theme.skin` |
 | **本规则文件** | 本文件存在。它被上游 `.gitignore` 排除、不进 git，需按 `packaging/README.md` 第八节全文重建 |
 
 ## 三、改功能时的约束（保护上面两条）
@@ -612,7 +608,7 @@ launchd 任务 `com.steven.dsh-upstream-check` 每周一 10:17 执行 `~/Library
 
 ## 四、二开产物位置
 
-- 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游追踪说明）
+- 打包与启动器：`packaging/`（其中 `README.md` 是二开总台账：改动清单、踩坑记录、换机恢复、上游同步说明）
 - 桌面端改动：`apps/desktop/`
 - 桌面通知插件：`packaging/desktop-notification/`（插件本体零上游改动；但为让它在 pnpm 操作后自愈，`apps/desktop` 有两个文件被改，见第三节与坑 19）
 

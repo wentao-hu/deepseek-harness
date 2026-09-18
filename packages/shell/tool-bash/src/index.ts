@@ -19,7 +19,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, canonicalPath, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, approveEscalation, canonicalPath, normalizeEscalationRequest, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-shell'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
@@ -63,7 +63,10 @@ function validateBashArgs(args: BashToolArgs): void {
   }
   // The escalation pairing (sandbox_permissions ⇔ justification, non-empty) is
   // the shared rule both enforcing families validate identically.
-  validateEscalationArgs(args.sandbox_permissions, args.justification)
+  // 二次开发：先归一化再校验——模型为「用不到」填的 `null` / 空串 / 枚举外自造词一律按
+  // 「未请求提权」处理，否则 `null.trim()` 会在这里崩，或者把一条本可执行的调用换成校验报错。
+  const escalation = normalizeEscalationRequest(args.sandbox_permissions, args.justification)
+  validateEscalationArgs(escalation?.mode, escalation?.justification)
 }
 
 function bashDescription(backgroundEnabled: boolean, escalationModes: readonly SandboxMode[]): string {
@@ -330,9 +333,12 @@ export function apply(ctx: Context, config: Config = {}): void {
       validateBashArgs(args)
       // Description is display metadata; workdir defaults to the caller's session.
       const standingPolicy = resolveSandboxPolicy(exec)
-      const approvedMode = args.sandbox_permissions !== undefined && args.justification !== undefined
-        ? await approveBashEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
-        : undefined
+      // 二次开发：同 validateBashArgs——只有归一化后仍然成对且落在枚举内的请求才驱动审批，
+      // 「模型给用不到的字段填了占位值」不再等于「整条调用作废」。
+      const escalation = normalizeEscalationRequest(args.sandbox_permissions, args.justification)
+      const approvedMode = escalation === undefined || escalation.mode === undefined || escalation.justification === undefined
+        ? undefined
+        : await approveBashEscalation(escalation.mode, escalation.justification, exec, standingPolicy)
       const policy = approvedMode === undefined
         ? standingPolicy
         : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }

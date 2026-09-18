@@ -1,0 +1,153 @@
+/*
+ * DSH Desktop × Claude Desktop 主题
+ *
+ * 由同目录 apply.mjs 幂等注入到 dsh-ui-tweaks 的 base 样式表末尾（profile 层，不改 app.asar）。
+ * CLT-BEGIN / CLT-END 之间的内容是真正的注入载荷，脚本按这两个标记替换，重复执行结果一致。
+ *
+ * 参数来源（实测，非推测）：
+ *   1) Claude Desktop 应用包内 CDS 设计令牌（--cds-*，comfortable 密度）。
+ *   2) claude.ai 渲染截图像素实测：代码块白色卡片 + 1px 浅描边；语法高亮五色。
+ *   详见 claude-desktop-style skill。
+ *
+ * 与 Claude 原生的偏离：代码 14px / 20px（Claude 原生 13px / 19px）。
+ *   字号由用户指定为 14px（先试 15px，判为太大）；行高按 Claude 的 13/19 比例同步放大。
+ *
+ * 作用域：仅浅色模式（body:not([data-ds-dark-theme])）。深色保持 DSH 原样，按用户要求本轮不做。
+ */
+
+/* CLT-BEGIN */
+body:not([data-ds-dark-theme]) {
+  /* ---------- 代码：14px / 20px（代码块 / 终端块 / diff 块 / read 块同源变量） ---------- */
+  --ds-font-family-code: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    'Liberation Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+
+  --dsw-font-markdown-code: 14px / 20px var(--ds-font-family-code);
+  --dsw-font-markdown-code-font-family: var(--ds-font-family-code);
+  --dsw-font-markdown-code-font-size: 14px;
+  --dsw-font-markdown-code-line-height: 20px;
+
+  --dsw-font-markdown-code-block: 14px / 20px var(--ds-font-family-code);
+  --dsw-font-markdown-code-block-font-family: var(--ds-font-family-code);
+  --dsw-font-markdown-code-block-font-size: 14px;
+  --dsw-font-markdown-code-block-line-height: 20px;
+
+  /* ---------- 标题：Claude 层级（16px 正文基准 22 / 18 / 16，字重 600） ----------
+     h3 与正文同号、只靠字重区分 —— 这是 Claude 观感的关键，不按传统比例放大。
+     delta 机制保留，使标题跟随 DSH 的字号设置一起缩放。 */
+  --dsw-font-markdown-h1: 600 calc(22px + var(--dsh-content-font-delta)) / calc(28px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h1-font-weight: 600;
+  --dsw-font-markdown-h1-font-size: calc(22px + var(--dsh-content-font-delta));
+  --dsw-font-markdown-h1-line-height: calc(28px + var(--dsh-content-font-delta));
+
+  --dsw-font-markdown-h2: 600 calc(18px + var(--dsh-content-font-delta)) / calc(26px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h2-font-weight: 600;
+  --dsw-font-markdown-h2-font-size: calc(18px + var(--dsh-content-font-delta));
+  --dsw-font-markdown-h2-line-height: calc(26px + var(--dsh-content-font-delta));
+
+  --dsw-font-markdown-h3: 600 calc(16px + var(--dsh-content-font-delta)) / calc(24px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h3-font-weight: 600;
+  --dsw-font-markdown-h3-font-size: calc(16px + var(--dsh-content-font-delta));
+  --dsw-font-markdown-h3-line-height: calc(24px + var(--dsh-content-font-delta));
+
+  --dsw-font-markdown-h4: 600 var(--dsh-content-font-size, 16px) / calc(24px + var(--dsh-content-font-delta)) var(--dsw-font-family);
+  --dsw-font-markdown-h4-font-weight: 600;
+  --dsw-font-markdown-h4-line-height: calc(24px + var(--dsh-content-font-delta));
+
+  /* ---------- 代码块 / 行内代码配色：Claude 的白色卡片 ---------- */
+  --dsw-alias-markdown-code-block: #ffffff;
+  --dsw-alias-markdown-code-block-banner: #ffffff;
+  --dsw-alias-markdown-inline-code: rgb(11 11 11 / 5%);
+
+  /* ---------- 语法高亮：claude.ai 截图实测五色 ---------- */
+  --shiki-foreground: #0b0b0b;
+  --shiki-token-keyword: #7c1ab0;
+  --shiki-token-function: #0f50ad;
+  --shiki-token-string: #197417;
+  --shiki-token-string-expression: #197417;
+  --shiki-token-constant: #108080;
+  --shiki-token-comment: #6d6b67;
+  --shiki-token-parameter: #0b0b0b;
+  --shiki-token-punctuation: #3d3d3a;
+  --shiki-token-link: #0f50ad;
+
+  /* ---------- 品牌蓝 → Claude 蓝（用户授权：完全对齐） ----------
+     只覆盖实测有 UI 消费点的两个令牌，其余梯度无 Claude 对应实测值，保持原样不臆造：
+       deepseek-500 = 链接色 / info 按钮底色（原 #4176e6）
+       deepseek-450 = 输入光标竖线 / 意图卡片浅底（原 #5686fe） */
+  --dsw-static-deepseek-500: #184f95;
+  --dsw-static-deepseek-450: #256abf;
+
+  /* ================= 全局 chrome 色板 =================
+     DSH 的中性色是冷灰（neutral-bluish），Claude 是暖灰。下面按明度对齐替换色温：
+     锚点取 claude-desktop-style skill 里 Claude 的实测值（#ffffff 卡片 / #f9f9f7 gray-20 /
+     #f0efec gray-50 / #898781 neutral-400 / #52514e neutral-600 / #0b0b0b neutral-900），
+     中间各级按明度线性插值 —— 锚点是实测，中间值是推导。 */
+  --dsw-static-neutral-bluish-00: #ffffff;
+  --dsw-static-neutral-bluish-50: #f9f9f7;
+  --dsw-static-neutral-bluish-60: #f9f9f7;
+  --dsw-static-neutral-bluish-75: #f0efec;
+  --dsw-static-neutral-bluish-100: #eae8e4;
+  --dsw-static-neutral-bluish-150: #e6e4df;
+  --dsw-static-neutral-bluish-200: #e0ded8;
+  --dsw-static-neutral-bluish-300: #d5d3cc;
+  --dsw-static-neutral-bluish-400: #adaba4;
+  --dsw-static-neutral-bluish-500: #98968e;
+  --dsw-static-neutral-bluish-600: #898781;
+  --dsw-static-neutral-bluish-700: #6d6b67;
+  --dsw-static-neutral-bluish-750: #565550;
+  --dsw-static-neutral-bluish-800: #3e3d39;
+  --dsw-static-neutral-bluish-850: #33322e;
+  --dsw-static-neutral-bluish-875: #2a2926;
+  --dsw-static-neutral-bluish-900: #1f1e1b;
+  --dsw-static-neutral-bluish-950: #1a1a18;
+  --dsw-static-neutral-bluish-1000: #0b0b0b;
+
+  /* 画布与卡片分层。DSH 把两者指到同一个色（都引用 bluish-00），靠描边区分层次；
+     Claude 是「画布暖白 #fcfbfb + 卡片纯白 #ffffff」，所以必须拆开单独设。 */
+  --dsw-alias-bg-base: #fcfbfb;
+  --dsw-alias-bg-layer-1: #ffffff;
+  --dsw-alias-bg-layer-2: #ffffff;
+  --dsw-alias-bg-layer-3: #ffffff;
+
+  /* 次要文字：按 Claude 的语义锚点取 #52514e，而不是跟着色阶的明度走
+     （色阶 700 插值出来是 #6d6b67，Claude 的次要文字实际更深）。 */
+  --dsw-alias-label-secondary: #52514e;
+
+  /* 交互态：DSH 原值带蓝调（#263148 系），换成中性暖灰，与 Claude 一致。 */
+  --dsw-alias-interactive-bg-hover: rgb(11 11 11 / 6%);
+  --dsw-alias-interactive-bg-active: rgb(11 11 11 / 10%);
+
+  /* 意图卡片 / 输入光标的品牌蓝：这个 alias 是硬编码色值（不走色阶令牌），
+     所以前面改 deepseek-500 覆盖不到它，单独处理。 */
+  --dsw-alias-brand-primary-new-colorprimary-new-color: #184f95;
+}
+
+/* 代码块外壳：8px 圆角 + 1px 浅描边（Claude 截图）。
+   .md-code-block 是 CodeBlock 组件挂出的稳定全局类名，不依赖 CSS Modules 哈希类。 */
+body:not([data-ds-dark-theme]) .md-code-block {
+  border: 1px solid rgb(11 11 11 / 10%);
+  border-radius: 8px;
+  /* 内层（标签栏 / 代码区）圆角由这个令牌控制，出厂 12px，同步到 8px */
+  --dsl-code-block-border-radius: 8px;
+}
+
+/* 语言标签栏与代码之间收紧。
+   原结构：标签栏 padding 上下各 9px + 代码区 padding-top 16px，叠加出约 25px 空白；
+   Claude 的标签行是紧凑的，这里压到 6px + 6px = 12px。
+   类名用属性选择器匹配 CSS Modules 的 _banner_<hash>，不依赖哈希值本身。 */
+body:not([data-ds-dark-theme]) .md-code-block [class*='banner_'] {
+  padding-top: 6px;
+  padding-bottom: 2px;
+}
+body:not([data-ds-dark-theme]) .md-code-block :where(pre) {
+  padding-top: 6px;
+}
+
+/* 行内代码：去掉 0.5px 描边、字号提到 14px。
+   压过 .markdown :not(pre) > code 的 em !important 需要更高特异性。 */
+body:not([data-ds-dark-theme]) :not(pre) > code {
+  font-size: 14px !important;
+  border-color: transparent;
+  border-radius: 4px;
+}
+/* CLT-END */

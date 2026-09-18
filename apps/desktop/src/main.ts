@@ -9,8 +9,10 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   nativeTheme,
   protocol,
+  Tray,
   type IpcMainInvokeEvent,
 } from 'electron'
 import { resolveDesktopPaths } from './paths.ts'
@@ -26,6 +28,7 @@ import { startupFailureDocument } from './startup-document.ts'
 
 const SCHEME = 'dsh-app'
 let focusPrimaryWindow = (): void => {}
+let statusTray: Tray | undefined
 type RecoveryAction = 'restart' | 'plugins' | 'reset'
 let profileRecoveryAvailable = (): boolean => false
 const emergencyPages = new WeakMap<BrowserWindow, { url: string; message: string; busy: boolean }>()
@@ -91,6 +94,30 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
     throw new Error('dsh desktop: DSH_DESKTOP_HOST_INSPECT_PORT must be an integer from 1 through 65535')
   }
   return port
+}
+
+/**
+ * Resolve the status bar image that matches the current platform.
+ * @returns Absolute path to the packaged PNG.
+ */
+function statusBarIconPath(): string {
+  const filename = process.platform === 'darwin' ? 'trayTemplate.png' : 'trayColor.png'
+  return fileURLToPath(new URL(`../assets/${filename}`, import.meta.url))
+}
+
+/**
+ * Create the status bar icon whose click focuses or recreates the primary window.
+ * @returns The live tray object, which the caller must keep referenced.
+ */
+function createStatusTray(): Tray {
+  const iconPath = statusBarIconPath()
+  const icon = nativeImage.createFromPath(iconPath)
+  if (icon.isEmpty()) throw new Error(`dsh desktop: status bar icon could not be loaded from ${iconPath}`)
+  if (process.platform === 'darwin') icon.setTemplateImage(true)
+  const tray = new Tray(icon)
+  tray.setToolTip(app.name)
+  tray.on('click', () => { focusPrimaryWindow() })
+  return tray
 }
 
 function createWindow(preload: string, show = false): BrowserWindow {
@@ -513,23 +540,37 @@ async function main(): Promise<void> {
     return window
   }
   focusPrimaryWindow = () => {
+    if (process.platform === 'darwin') app.show()
     const window = mainWindow
     if (window === undefined || window.isDestroyed()) {
       createMainWindow()
       void navigateMain(backendState().phase === 'ready' ? applicationUrl : startupUrl)
         .catch((error: unknown) => { console.error(error) })
-      return
+    } else {
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
     }
-    if (window.isMinimized()) window.restore()
-    window.show()
-    window.focus()
+    if (process.platform === 'darwin') app.focus({ steal: true })
+  }
+
+  // 二次开发：状态栏图标。点击图标会激活主窗口；窗口已被 Cmd+W 关掉时重建。
+  try {
+    statusTray = createStatusTray()
+  } catch (error) {
+    console.error('dsh desktop: status bar icon unavailable', error)
   }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) focusPrimaryWindow()
   })
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit()
+    // 二次开发：有状态栏图标时常驻后台；没有图标时保持上游的 Windows/Linux 退出行为。
+    if (statusTray === undefined && process.platform !== 'darwin') app.quit()
+  })
+  app.on('will-quit', () => {
+    statusTray?.destroy()
+    statusTray = undefined
   })
   app.on('before-quit', (event) => {
     if (shellInstallerOwnsQuit || quitting) return
