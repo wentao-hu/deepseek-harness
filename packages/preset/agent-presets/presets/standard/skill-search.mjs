@@ -24,6 +24,9 @@
  * the composition must NOT mount both, or the catalog injection returns.
  */
 
+import { realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
+
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'skill-search'
 
@@ -56,7 +59,13 @@ export function apply(ctx) {
    * so a Chinese query tokenized to nothing, hit the `wanted.length === 0` branch,
    * and returned the whole catalog instead of the skills actually asked for.
    */
-  const tokens = (text) => (text || '').toLowerCase().split(/[^\p{L}\p{N}_-]+/u).filter(Boolean)
+  // 中英混排查询要点：`\p{L}` 保住了 CJK，但也让「PDF技能」这类混排整段变成一个
+  // 不可分的 token，永远匹配不上 haystack 里独立的 `pdf`。这里在汉字/Latin 边界再
+  // 切一刀，两边任一命中即可（「PDF技能」→ `pdf` + `技能`）。
+  const tokens = (text) => (text || '').toLowerCase()
+    .split(/[^\p{L}\p{N}_-]+/u)
+    .flatMap((part) => part.match(/[\p{Script=Han}]+|[^\p{Script=Han}]+/gu) ?? [])
+    .filter(Boolean)
 
   ctx.tools.register({
     name: 'skill_search',
@@ -80,7 +89,10 @@ export function apply(ctx) {
         const matches = all.filter((skill) => {
           if (wanted.length === 0) return true
           const haystack = tokens(`${skill.name} ${skill.description ?? ''} ${skill.whenToUse ?? ''}`).join(' ')
-          return wanted.every((token) => haystack.includes(token))
+          // 任一 token 命中即可：原来的 every 让查询里多一个词（例如顺手加的「技能」）
+          // 就把整条查询打成零结果。下面按「命中名字 ×10」排序、结果有上限兜底，
+          // 所以放宽召回不等于失控。
+          return wanted.some((token) => haystack.includes(token))
         })
         // Rank by where the tokens hit: a name hit counts ten times a description
         // hit, and ties fall back to name order so an unfiltered query stays stable.
@@ -143,7 +155,25 @@ export function apply(ctx) {
           content: [{ type: 'text', text: body }],
           source: { kind: 'skill-invocation', name: args.name, form: 'instructions' },
         })
-        return { text: `Skill "${args.name}" loaded; its instructions will be injected for the next request.` }
+        // 三种形态都要给出可直接使用的绝对路径：directory bundle（<dir>/SKILL.md）、
+        // 根部扁平 <name>.md、以及软链接入口。`skill.path` 是指令文件本身、`resourceBase.path`
+        // 是其所在目录，但两者都由 provider 用 join(root, name) 拼出、不解析软链接（扁平 skill 的
+        // resourceBase 更是整个 root 目录），所以真身一律再 realpathSync 解析一次。
+        const entryFile = typeof skill?.path === 'string' ? skill.path : undefined
+        const entryDir = skill?.resourceBase?.kind === 'directory' ? skill.resourceBase.path : undefined
+        const resolveReal = value => {
+          if (value === undefined) return undefined
+          try { return realpathSync(value) } catch { return value }
+        }
+        const file = resolveReal(entryFile)
+        const dir = file === undefined ? resolveReal(entryDir) : dirname(file)
+        const lines = []
+        if (file !== undefined) lines.push(`Skill file: ${file}`)
+        if (dir !== undefined) lines.push(`Skill directory: ${dir}`)
+        if (file !== undefined && entryFile !== file) lines.push(`(discovered via ${entryFile})`)
+        const located = lines.length === 0 ? ''
+          : `\n${lines.join('\n')}\nResolve relative paths mentioned by this skill (such as reference.md or scripts/) against the skill directory.`
+        return { text: `Skill "${args.name}" loaded; its instructions will be injected for the next request.${located}` }
       } catch (error) {
         return { text: `skill_load failed: ${String((error && error.message) || error)}` }
       }

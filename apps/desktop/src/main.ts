@@ -70,20 +70,24 @@ interface RuntimeResources {
   readonly pnpm: string
   readonly dsh: string
   readonly localPlugins: string
+  readonly profileResolution?: 'runtime'
 }
 
 function runtimeResources(): RuntimeResources {
   const development = !app.isPackaged
-  const node = (development ? process.env.DSH_DESKTOP_NODE_BINARY : undefined)
-    ?? join(process.resourcesPath, 'runtime', 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+  const node = development
+    ? process.env.DSH_DESKTOP_NODE_BINARY
+      ?? join(process.resourcesPath, 'runtime', 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+    : process.execPath
   const pnpm = (development ? process.env.DSH_DESKTOP_PNPM_ENTRY : undefined)
     ?? join(process.resourcesPath, 'runtime', 'pnpm', 'bin', 'pnpm.mjs')
-  const dsh = (development ? process.env.DSH_DESKTOP_DSH_DIR : undefined) ?? join(process.resourcesPath, 'dsh')
+  const dsh = (development ? process.env.DSH_DESKTOP_DSH_DIR : undefined)
+    ?? (development ? join(process.resourcesPath, 'dsh') : join(app.getAppPath(), 'dsh'))
   // Kept outside Resources/dsh: verifyDesktopRuntime compares that tree's complete
   // file inventory against its build-time manifest, so an extra directory voids it.
   const localPlugins = (development ? process.env.DSH_DESKTOP_LOCAL_PLUGINS_DIR : undefined)
     ?? join(process.resourcesPath, 'local-plugins')
-  return { node, pnpm, dsh, localPlugins }
+  return { node, pnpm, dsh, localPlugins, ...(development ? {} : { profileResolution: 'runtime' }) }
 }
 
 function developmentHostInspectPort(enabled: boolean): number | undefined {

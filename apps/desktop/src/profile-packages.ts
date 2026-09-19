@@ -100,6 +100,33 @@ export function unlinkDesktopHostPackages(profile: string): void {
 }
 
 /**
+ * Remove recorded host links whose link target no longer exists.
+ *
+ * 二次开发：桌面运行时自 0.1.6-alpha.1 起打进 app.asar，旧版 link 模式 profile 里的宿主包
+ * 软链会指向已被换掉的 `Contents/Resources/dsh`（换新版 app 后必然消失）。runtime 解析模式
+ * 下这些悬空链接已经无用，却会让 {@link validateDesktopPluginGraph} 扫描 profile 时直接报
+ * `invalid installed package` 并阻塞启动。只清理「有归属记录、当前确实是软链、且链接目标已
+ * 不存在」的条目；目标仍在本机（例如并存旧版运行时）或软链指向它处（无归属）时保持原语义。
+ * @param profile - Desktop profile.
+ * @returns Whether any broken link was removed.
+ */
+export function unlinkBrokenDesktopHostPackages(profile: string): boolean {
+  let removed = false
+  for (const link of readDesktopProfileState(profile)?.links ?? []) {
+    const path = join(profile, 'node_modules', link.name)
+    const entry = stat(path)
+    if (entry === undefined) continue
+    if (!entry.isSymbolicLink() || resolve(dirname(path), readlinkSync(path)) !== resolve(link.target)) {
+      throw new Error(`desktop profile: refusing to replace unowned package ${link.name}`)
+    }
+    if (existsSync(path)) continue
+    unlinkSync(path)
+    removed = true
+  }
+  return removed
+}
+
+/**
  * Bind an external profile to this application's real package directories.
  * @param profile - Candidate profile.
  * @param root - Current immutable runtime directory.
@@ -114,6 +141,19 @@ export function linkDesktopHostPackages(profile: string, root: string, runtime: 
     mkdirSync(dirname(path), { recursive: true })
     symlinkSync(link.target, path, process.platform === 'win32' ? 'junction' : 'dir')
   }
+  const state: DesktopProfileState = { schemaVersion: 1, runtimeId: desktopRuntimeId(runtime), version: runtime.release.version,
+    nodeVersion: runtime.release.nodeVersion, platform: runtime.platform, arch: runtime.arch,
+    lockHash: desktopPluginLockHash(profile), links }
+  writeFileSync(join(profile, DESKTOP_PROFILE_STATE), `${JSON.stringify(state, undefined, 2)}\n`, { mode: 0o600 })
+}
+
+/**
+ * Record a runtime-resolved profile without changing links left by an earlier release.
+ * @param profile - Active Desktop profile.
+ * @param runtime - Verified release descriptor supplying the runtime generation.
+ */
+export function recordDesktopRuntimeProfile(profile: string, runtime: DesktopRuntimeDescriptor): void {
+  const links = readDesktopProfileState(profile)?.links ?? []
   const state: DesktopProfileState = { schemaVersion: 1, runtimeId: desktopRuntimeId(runtime), version: runtime.release.version,
     nodeVersion: runtime.release.nodeVersion, platform: runtime.platform, arch: runtime.arch,
     lockHash: desktopPluginLockHash(profile), links }
@@ -167,16 +207,28 @@ function packageFrom(anchor: string, name: string): string | undefined {
  * @param root - Immutable runtime directory.
  * @param runtime - Verified shared package inventory.
  * @param activePlugins - Explicit enabled plugin roots whose peer compatibility is required.
+ * @param resolutionMode - Whether host packages are linked or supplied by a runtime generation.
  */
 export function validateDesktopPluginGraph(
   profile: string, root: string, runtime: DesktopRuntimeDescriptor, activePlugins: readonly string[],
+  resolutionMode: 'link' | 'runtime' = 'link',
 ): void {
   const profileRoot = realpathSync.native(profile)
   const shared = new Map(runtime.sharedPackages.map((entry) => {
-    return [entry.name, realpathSync.native(runtimePath(root, entry.path))] as const
+    const path = runtimePath(root, entry.path)
+    let canonical: string
+    try {
+      canonical = realpathSync.native(path)
+    } catch (error) {
+      if (!existsSync(path)) throw error
+      canonical = resolve(path)
+    }
+    return [entry.name, { path: canonical, version: entry.version }] as const
   }))
-  for (const [name, path] of shared) {
-    if (packageFrom(profile, name) !== path) throw new Error(`desktop profile: missing or incorrect host link ${name}`)
+  if (resolutionMode === 'link') {
+    for (const [name, entry] of shared) {
+      if (packageFrom(profile, name) !== entry.path) throw new Error(`desktop profile: missing or incorrect host link ${name}`)
+    }
   }
   if (activePlugins.length === 0) return
   const scanned = new Set<string>()
@@ -195,7 +247,7 @@ export function validateDesktopPluginGraph(
       const info = manifest(canonical)
       const host = shared.get(info.name)
       if (host !== undefined) {
-        if (canonical !== host || path !== join(profile, 'node_modules', info.name)) {
+        if (resolutionMode !== 'runtime' && (canonical !== host.path || path !== join(profile, 'node_modules', info.name))) {
           throw new Error(`desktop profile: duplicate or aliased host package ${info.name} at ${path}`)
         }
         continue
@@ -215,19 +267,25 @@ export function validateDesktopPluginGraph(
     for (const [name, range] of Object.entries({ ...deps, ...info.peerDependencies })) {
       const peer = name in info.peerDependencies
       const optional = peer ? info.optionalPeers.has(name) : name in info.optionalDependencies
+      const host = shared.get(name)
+      if (host !== undefined && name in deps) throw new Error(`desktop profile: ${chain} must declare ${name} as a peer dependency`)
+      if (host !== undefined) {
+        if (peer && !satisfies(host.version, range)) {
+          throw new Error(`desktop profile: ${chain} requires ${name}@${range}, found ${host.version}`)
+        }
+        continue
+      }
       const target = packageFrom(path, name)
       if (target === undefined && optional) continue
       if (target === undefined) throw new Error(`desktop profile: ${chain} requires missing ${name}@${range}`)
-      const host = shared.get(name)
-      if (host !== undefined && name in deps) throw new Error(`desktop profile: ${chain} must declare ${name} as a peer dependency`)
-      if (host !== undefined ? target !== host : !inside(profileRoot, target)) {
+      if (!inside(profileRoot, target)) {
         throw new Error(`desktop profile: ${chain} resolves ${name} outside its owned packages`)
       }
       const dependency = manifest(target)
       if (peer && !satisfies(dependency.version, range)) {
         throw new Error(`desktop profile: ${chain} requires ${name}@${range}, found ${dependency.version}`)
       }
-      if (host === undefined) visit(target, `${chain} -> ${name}`)
+      visit(target, `${chain} -> ${name}`)
     }
   }
   for (const name of activePlugins) {

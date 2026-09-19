@@ -304,6 +304,9 @@ const archive = async (): Promise<Uint8Array> =>
     }
     inventory.apply({
       baseUrl,
+      // A real Cordis context always answers get(); this minimal mock mirrors an
+      // isolated composition with neither optional service installed.
+      get: () => undefined,
       loader: tree,
       deepseekLlmApiExtensions: {
         register: (field: string, contribution: { readonly prepare: Prepare }): void => {

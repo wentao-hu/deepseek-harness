@@ -1,6 +1,6 @@
 # DSH 二次开发：打包与使用指南
 
-> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.5-rc.2`（2026-09-10）
+> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.6-alpha.1`（2026-09-15 同步；上游运行时自本版起打进 app.asar）
 > 本文档记录本机二次开发的产物、用法、以及踩过的坑，目的是**以后重打包一条命令搞定、不再重复踩坑**。
 >
 > 仓库分两条线：`master` 是 macOS 开发线（本文档主体），`for_windows` 是它的 Windows 适配线。
@@ -26,7 +26,7 @@
 ### CLI
 
 ```bash
-dsh --version                       # 0.1.5-rc.2
+dsh --version                       # 0.1.6-alpha.1
 dsh --profile web                   # 启动 Web UI（默认浏览器打开）
 dsh --profile headless "任务描述"    # 一次性执行并打印结果
 ```
@@ -178,9 +178,10 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `packaging/sync-shared-components.sh`（新增）、`packaging/build-app.sh` | **共用组件分发到 TUI**：两个前端共用同一批注入组件（如 `skill-search.mjs`），但运行副本各自独立——Electron 那份由打包第 1 步组装进 app（直接改 app 内文件会破坏 ad-hoc 签名，所以不在此处理），TUI 那份在 `~/.dsh/.agent-presets/liangshen/`、改仓库源码不会自动更新。本脚本把权威源 `packages/preset/agent-presets/presets/standard/` 下的共用组件同步过去：幂等（内容相同即跳过）、目标目录不存在（换机后 TUI 未装）则跳过并提示。`build-app.sh` 的 [6/6] 步自动调用，也可单独跑。**不进换机恢复清单**——属辅助步骤，缺失不影响二开功能 |
 | `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**09-12 起不再是「零上游文件改动」**——插件必须随 app 内置才能自愈，为此改了 `apps/desktop` 两个文件，见下一行 |
 | `apps/desktop/src/project-manager.ts`、`apps/desktop/src/main.ts`、`apps/desktop/tests/project-manager.spec.ts`、`apps/desktop/tests/plugin-pnpm.spec.ts`、`packaging/build-app.sh` | **本地插件自愈**（坑 19）：profile 清单只接受 registry 精确版本（`projectManifest`），通知插件进不了 `dependencies`，于是每次 `pnpm add/remove/update` 都会把它当多余包清掉，`rebuild` 分支更会直接删掉整个 `node_modules`——之后启动校验报 `missing local plugin dsh-desktop-notification`、app 拒绝启动（09-12 实际发生过一次）。修法沿用上游已有的 `linkDesktopHostPackages` 模式：`build-app.sh` 第 3 步把插件副本内置到 `Contents/Resources/local-plugins/`，`prepareProfile` 在校验前调用新增的 `materializeLocalPlugins` 重新物化，`DesktopRuntimeExecutables` 相应增加必填的 `localPlugins` 字段（`plugin-pnpm.spec.ts` 构造该值时同步补上，漏改会让 pre-push 的 typecheck 直接失败）。**副本绝不能放 `Resources/dsh`**——`verifyDesktopRuntime` 对该目录做全量文件清单比对，多一个文件即判资源被篡改。副作用两条：① 改 `packaging/desktop-notification/` 后**必须重新打包**，只重跑安装脚本会被 app 的内置副本覆盖；② app 只物化文件、不动 `bundles` 登记，所以「禁用第三方插件」仍然有效，换机首次启用仍靠安装脚本登记 |
-| `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见） |
+| `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见）。**09-16 补丁**：`skill_load` 返回值追加技能绝对路径，三种形态都要正确——directory bundle（`<dir>/SKILL.md`）、根部扁平 `<name>.md`、软链接入口。取 `skill.path`（指令文件本身，扁平 skill 时即该 .md 文件）与 `skill.resourceBase.path`（所在目录，扁平 skill 时是整个 root 目录），两者都由 provider 用 `join(root, name)` 拼出、不解析软链接，故再各自 `realpathSync` 一次；输出 `Skill file:` 加 `Skill directory:`，路径被解析过时附 `(discovered via <入口>)`。**副本同步**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、`~/.dsh/.agent-presets/liangshen/` 三处须同内容（后两处分别由补丁脚本与 `build-app.sh` 第 6 步取用），只改其中一处会在重打补丁或切换模式时回退；官网版 `DSH Desktop.app` 内那份是同日早一版（只覆盖目录形态、已人工验证可用），下次重打该补丁时由载荷覆盖为新版。原返回值只有一句加载确认，agent 手里没有任何路径，只能靠猜去找 `reference.md` / `scripts/`（09-12 实际发生过把 `~/.claude/skills` 误当权威副本的事故）。**09-16 补丁（模糊匹配）**：`skill_search` 原按「每个词都命中才算」（`wanted.every`）过滤，且 `tokens()` 用 `[^\p{L}\p{N}_-]+` 切分——`\p{L}` 保住了汉字，却也让中英混排（如「PDF技能」）整段成为一个不可分 token，永远匹配不上目录里独立的 `pdf`，查询里多一两个字即零命中（实测「mac-use computer use 桌面操作 截图」零结果、单词「mac」一条命中）。改法两处：① `tokens()` 在汉字/Latin 边界再切一刀（`flatMap(part => part.match(/[\p{Script=Han}]+|[^\p{Script=Han}]+/gu) ?? [])`）；② `every` 改 `some`。排序仍按「命中名字 ×10」、结果上限 20 条兜底，故放宽召回不等于失控；**已知副作用**（未消除）：泛用短词会带进弱相关结果（自测里查询的 `use` 把 `pdf` 也召回了），靠排序区分，未加词长过滤。**自建版 app 必须重新打包才生效**——它读的是本仓库源码经 `build-app.sh` 组装进 `app.asar` 的副本，改工作区源码不影响已安装的 app，且 `build-app.sh` 第 6 步会把本文件覆盖到 TUI 的 `~/.dsh/.agent-presets/liangshen/`，权威源落后会把 TUI 侧回退成旧版。**四份副本须同内容**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、官网版 app 内、`~/.dsh/.agent-presets/liangshen/`；只改后三份会漏掉自建版 app（它由本仓库构建） |
+| `apps/desktop/src/profile-packages.ts`、`apps/desktop/src/project-manager.ts`、`apps/desktop/tests/project-manager.spec.ts` | **link→runtime 迁移兜底**（坑 20）：上游 0.1.6-alpha.1 起宿主包改由 app.asar 内运行时提供（`profileResolution: 'runtime'`），但旧 profile 里 link 模式遗留的软链指向随新包被替换掉的 `Contents/Resources/dsh`，悬空后会让 `validateDesktopPluginGraph` 报 `invalid installed package` 并**直接挡住启动**（09-15 实际发生）。新增 `unlinkBrokenDesktopHostPackages()`——只清理「有归属记录、当前是软链、且链接目标已不存在」的条目，并在 `applyRelease()` 的 early-exit 判断**之前**调用（二次启动时 state 已被改写，只有这一层能兜住）；state 里的 links 记录保留，供降级/后续清理使用 |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
-| `scripts/release/tarball.ts`、`apps/desktop/scripts/prepare-package-set.ts` | **Windows 必需**：新增 `captureTarball()`，只把文件名交给 `tar`、目录走 `cwd`，避免 Windows 盘符被 GNU tar 当成远程主机（坑 20）。对 macOS/Linux 行为等价 |
+| `scripts/release/tarball.ts`、`apps/desktop/scripts/prepare-package-set.ts` | **Windows 必需**：新增 `captureTarball()`，只把文件名交给 `tar`、目录走 `cwd`，避免 Windows 盘符被 GNU tar 当成远程主机（坑 21）。对 macOS/Linux 行为等价 |
 | `apps/desktop/assets/icon.ico`（新增） | Windows 图标：16/24/32/48/64/128/256 共 7 档，PNG 内嵌、保留 alpha |
 | `packaging/build-app.ps1`、`packaging/dsh.cmd`、`packaging/dsh-tui.cmd`（新增） | Windows 一键打包脚本与命令行启动器（对应 mac 侧 `build-app.sh` / `dsh` / `dsh-tui`） |
 | `apps/desktop-host/config/desktop.cordis.patch.yml`（新增 1 段） | **开启会话内容全文搜索**：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层是最后应用的最高优先级 patch 且随 app 打包分发，在此覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。选这里而非 profile 的 `cordis.patch.yml`，是因为 profile 目录被 `~/.dsh` 的 `.gitignore` 排除、换机与重置 Desktop 都会丢 |
@@ -383,7 +384,26 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **手动兜底**：`bash packaging/install-desktop-notification.sh`（幂等）只补文件与 `bundles` 登记；
   若 app 已经带内置副本，重启一次即可自愈。
 
-### 坑 20（Windows 专有）：`tar` 把盘符当成远程主机
+### 坑 20：上游 0.1.6 换 asar 运行时后，旧 profile 的宿主包软链悬空，app 起不来
+
+- **现象（09-15 实际发生）**：打包 0.1.6-alpha.1 后双击 app，弹出启动失败页：
+  `desktop profile: invalid installed package /Users/<用户>/.dsh/profiles/desktop/node_modules/@deepseek-ai/cordis`，
+  并给出「禁用第三方插件 / 重置 Desktop」两个恢复选项。**不要去点「重置」——那会删掉全部 profile 配置与第三方插件。**
+- **根因**：上游 `fa7d5519f5` 起把桌面运行时整体打进 `app.asar`（并新增
+  `profileResolution: 'runtime'`），宿主包不再需要 profile 里的软链。但旧版（link 模式）
+  创建的 241 条软链指向 `Contents/Resources/dsh/node_modules/...`——新版 app 替换后该目录
+  不存在，软链全部悬空；启动走 `applyRelease()` 时，`prepareProfile()` 先写入新 state
+  （**悬空软链此时还没被清**），随后 `validateDesktopPluginGraph()` 扫描 profile 立即抛错。
+  更隐蔽的是：**第一次失败就已经把 state 改写成新 runtimeId**，所以第二次启动会走 early-exit
+  直接跳过校验——不修代码的话表现为「有时能开、有时打不开」的不确定状态。
+- **解法**：见第三节「link→runtime 迁移兜底」一行——`unlinkBrokenDesktopHostPackages()`
+  只删「有归属记录 + 是软链 + 目标不存在」的条目（真实目录或指向别处的软链一律不碰，沿用
+  `refusing to replace unowned package` 守卫），并在 early-exit 之前执行；state 的 links 记录保留。
+- **验证**：修复后重启，`~/.dsh/profiles/desktop/node_modules/@deepseek-ai/` 下悬空软链
+  241 → 0，主进程 + Renderer + `dsh-desktop-host` 后端三个进程都在，启动失败页不再出现。
+- **排查口诀**：这类「profile 校验失败」先看**报错路径本身是不是悬空软链**
+  （`ls -la` 看箭头、`readlink -f` 看目标是否存在），再对照本节第三节的改动清单，别急着用恢复选项。
+### 坑 21（Windows 专有）：`tar` 把盘符当成远程主机
 
 - **现象**：`release:pack` 报
   `Error: tar -tzf D:\...\deepseek-ai-dsh-brand-0.1.5-rc.2.tgz exited with 2`，子进程输出
@@ -397,7 +417,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **以后注意**：新增读 tarball 的地方一律走 `captureTarball`，不要再写
   `capture('tar', [..., 绝对路径])`。
 
-### 坑 21（Windows 专有）：`prepare:dsh` 依赖 Unix 的 `patch`
+### 坑 22（Windows 专有）：`prepare:dsh` 依赖 Unix 的 `patch`
 
 - **现象**：组装内置运行时时 `spawnSync patch ENOENT`，产出的桌面端缺少 web_search 透传补丁。
 - **根因**：`applyRuntimePatches()` 用 `execFileSync('patch', ...)` 把仓库补丁打进运行时，
@@ -406,14 +426,14 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   并注入 PATH，找不到时明确报错提示安装 Git。**不要**把补丁逻辑改成「只在 mac 生效」——
   那样 Windows 包会静默丢掉服务端 `web_search` 能力，且不会有任何报错。
 
-### 坑 22（Windows 专有）：`iconutil` 只在 macOS 存在
+### 坑 23（Windows 专有）：`iconutil` 只在 macOS 存在
 
 - **现象**：Windows 上跑 `build:icons` 报 `spawnSync iconutil ENOENT`。
 - **根因**：脚本原本无条件调 `iconutil` 生成 `.icns`，而它是 macOS 自带命令。
 - **修复**：`build-icons.mjs` 按平台分流 —— darwin 出 `.icns`，`.png` 与 `.ico` 则所有平台都出
   （Windows 打包只用后两者）。`.ico` 由脚本自己写容器，不依赖任何外部工具。
 
-### 坑 23（本机 WorkBuddy 环境专有）：删改保护会掐断打包
+### 坑 24（本机 WorkBuddy 环境专有）：删改保护会掐断打包
 
 - **现象**：构建/打包中途报
   `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":501,"threshold":500,"scope":"turn",...}`，
@@ -435,7 +455,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   这类自动更新元数据，未签名本机自用不需要。
 - **不要**去改 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD` 或清空相关环境变量 —— 那是绕过安全机制。
 
-### 坑 24（Windows 专有）：PowerShell 5.1 按 GBK 读「无 BOM 的 UTF-8 脚本」，中文把语法拆坏
+### 坑 25（Windows 专有）：PowerShell 5.1 按 GBK 读「无 BOM 的 UTF-8 脚本」，中文把语法拆坏
 
 - **现象**：`packaging\install-desktop-notification.ps1` 一个字符都不输出、也不报错，
   文件和 profile 清单都没变化；用 `Parser::ParseFile` 一查却是 **2 个语法错误**
@@ -488,8 +508,10 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 6. **打包桌面端**：`bash packaging/build-app.sh`
 7. **验证**：
    ```bash
-   dsh --version                                  # 应为 0.1.5-rc.2
-   grep -c RESPONSES_NATIVE_TOOLS "/Applications/DeepSeek Harness.app/Contents/Resources/dsh/node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js"   # 应为 2
+   dsh --version                                  # 应为 0.1.6-alpha.1
+   # 0.1.6-alpha.1 起上游把桌面运行时整体打进 app.asar（旧的 Contents/Resources/dsh 路径已不存在），
+   # 校验补丁标记要把目标文件从 asar 抽到临时目录再 grep（asar 命令用 npx @electron/asar）：
+   cd "$(mktemp -d)" && npx --yes @electron/asar extract-file "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar" "dsh/node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js" && grep -c RESPONSES_NATIVE_TOOLS openai-responses.js   # 应为 2
    codesign --verify "/Applications/DeepSeek Harness.app" && echo 签名有效
    ```
    最后双击应用发一句「搜索并总结今天的一条主要科技新闻」——能给出当日真实新闻，即代表服务端搜索生效。
@@ -497,6 +519,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
    通知链路：首次启动应弹一条「DeepSeek Harness 通知已启用」；切到别的应用后发一条消息，跑完应弹「第 N 回合已完成」。此时「系统设置 → 通知」里能看到本应用。
    profile 由应用首次启动时生成，插件装不进去时隔一层排查：`bash packaging/install-desktop-notification.sh`（幂等，可随时重跑）。
 
+   会话内容搜索（桌面端）：在左侧搜索框输入一个**只出现在某条对话正文、不在任何会话标题里**的词——应列出那条会话并带正文片段。若仍提示「内容搜索暂不可用，仅显示名称匹配」，说明 app 里的 `config/desktop.cordis.patch.yml` 没带上这次改动（同样先从 asar 抽出该文件）：`cd "$(mktemp -d)" && npx --yes @electron/asar extract-file "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar" "dsh/node_modules/@deepseek-ai/dsh-desktop-host/config/desktop.cordis.patch.yml" && grep -A3 session-query-sqlite desktop.cordis.patch.yml` 应看到 `first-search`。索引落在 `~/.dsh/cache/session-query.sqlite`，删掉即重建。
 ### Windows 侧（`for_windows` 分支）
 
 1. **基础工具**：Node 22.19+/24+、pnpm 11.7.0、**Git for Windows**（提供 `patch.exe`）。
@@ -586,7 +609,7 @@ Codex 自动化任务**「DeepSeek Harness 官方更新同步」**（id `deepsee
 
 | 二开功能 | 怎么验 |
 |---|---|
-| CLI 启动器 | `dsh --version` 输出 `0.1.5-rc.2` |
+| CLI 启动器 | `dsh --version` 输出 `0.1.6-alpha.1` |
 | Edit / View / File / Window 菜单 | app 里 `Cmd+C/V/X/A/Z`、`Cmd +/-/0` 有响应，`Cmd+W` 能关窗、`Cmd+M` 能最小化（上游自定义菜单把 View / Edit / File / Window 四组 role 全漏了，是本 fork 补的） |
 | 标题栏 | 白色底、无文字（只剩红黄绿按钮）——即使在深色系统下也应是白的（`nativeTheme.themeSource = 'light'`） |
 | 应用图标 | Dock 里不是 Electron 默认图标 |
