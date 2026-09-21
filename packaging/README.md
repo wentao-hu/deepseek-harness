@@ -1,6 +1,6 @@
 # DSH 二次开发：打包与使用指南
 
-> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.6-alpha.1`（2026-09-15 同步；上游运行时自本版起打进 app.asar）
+> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.6-alpha.2`（2026-09-21 同步；上游运行时自 0.1.6-alpha.1 起打进 app.asar；0.1.6-alpha.2 把桌面端改为共享 Web 运行时的薄 Electron shell）
 > 本文档记录本机二次开发的产物、用法、以及踩过的坑，目的是**以后重打包一条命令搞定、不再重复踩坑**。
 
 ## 一、产物与核心能力
@@ -102,9 +102,9 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的空值——提权目标按**白名单**判定（只认 `workspace-write`/`danger-full-access`），枚举外的编造词连同配对的 `justification` 一起丢。起初是占位词黑名单（`null`/`none`/`nil`/`undefined`），09-12 模型改填 `"require"` 即绕过。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 13）：`classifyPiAiError` 把配额判定提到 401/403 之前，并把 403 从 `AUTH` 拆成独立的 `FORBIDDEN`——公司网关把配额耗尽也渲染成 403，先判状态码会把配额问题误报成 key 失效 |
-| `packages/sandbox/sandbox/src/escalation.ts`、`packages/sandbox/sandbox/tests/escalation.spec.ts`、`packages/shell/tool-bash/tests/tools.spec.ts`、`packages/shell/tool-pwsh/tests/tools.spec.ts` | **新增**（坑 14）：`approveEscalation` 在请求模式**等于**当前模式时直接放行，不再抛 `not strictly wider`。同族两个测试文件把「相等即报错」的用例换成真正的更窄场景 |
-| `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
-| `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
+| ~~`packages/sandbox/sandbox/src/escalation.ts`~~（坑 14，**2026-09-21 退役**）：上游已自行实现同一语义（`approveEscalation` 首行 `if (mode === effectiveMode) return effectiveMode`），fork 的源码改动已随 0.1.6-alpha.2 同步撤下 |
+| `apps/desktop/scripts/prepare-dsh.ts` | **4 处小改**：注册表可覆盖（`DSH_DESKTOP_NPM_REGISTRY`）/ 未配置签名身份时跳过运行时预签名 / 组装后把 pi-ai 补丁传导进运行时 / `carryDesktopPatch()` 把 fork 的 Desktop 覆盖层 patch 拷进运行时树 |
+| ~~`apps/desktop/tests/fixtures/runtime-payload-smoke.mjs`~~（**2026-09-21 退役**）：上游重写该 smoke 时已移除整个 `fs-ext` 校验，fork 的「缺席即跳过」补丁不再需要 |
 | `apps/desktop/electron-builder.config.mjs` | **5 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标）；`files` 增加 `assets/tray*.png`，让状态栏图标随 asar 一起分发（该项连注释共 2 行） |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 View 菜单**：绑定系统缩放 role（`resetZoom`/`zoomIn`/`zoomOut`）。上游用自定义菜单整体替换了 Electron 默认菜单却未补 View 菜单，导致 `Cmd +/-/0` 完全无响应。菜单文案走 locale 字典 |
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 Edit 菜单**：绑定系统剪贴板 role（`undo`/`redo`/`cut`/`copy`/`paste`/`selectAll`）。与上面 View 菜单同一根因——上游自定义菜单整体替换了默认菜单却未补 Edit 菜单，macOS 上 `Cmd+C/V/X/A/Z` 因此全部无响应。菜单文案走 locale 字典 |
@@ -122,7 +122,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见）。**09-16 补丁**：`skill_load` 返回值追加技能绝对路径，三种形态都要正确——directory bundle（`<dir>/SKILL.md`）、根部扁平 `<name>.md`、软链接入口。取 `skill.path`（指令文件本身，扁平 skill 时即该 .md 文件）与 `skill.resourceBase.path`（所在目录，扁平 skill 时是整个 root 目录），两者都由 provider 用 `join(root, name)` 拼出、不解析软链接，故再各自 `realpathSync` 一次；输出 `Skill file:` 加 `Skill directory:`，路径被解析过时附 `(discovered via <入口>)`。**副本同步**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、`~/.dsh/.agent-presets/liangshen/` 三处须同内容（后两处分别由补丁脚本与 `build-app.sh` 第 6 步取用），只改其中一处会在重打补丁或切换模式时回退；官网版 `DSH Desktop.app` 内那份是同日早一版（只覆盖目录形态、已人工验证可用），下次重打该补丁时由载荷覆盖为新版。原返回值只有一句加载确认，agent 手里没有任何路径，只能靠猜去找 `reference.md` / `scripts/`（09-12 实际发生过把 `~/.claude/skills` 误当权威副本的事故）。**09-16 补丁（模糊匹配）**：`skill_search` 原按「每个词都命中才算」（`wanted.every`）过滤，且 `tokens()` 用 `[^\p{L}\p{N}_-]+` 切分——`\p{L}` 保住了汉字，却也让中英混排（如「PDF技能」）整段成为一个不可分 token，永远匹配不上目录里独立的 `pdf`，查询里多一两个字即零命中（实测「mac-use computer use 桌面操作 截图」零结果、单词「mac」一条命中）。改法两处：① `tokens()` 在汉字/Latin 边界再切一刀（`flatMap(part => part.match(/[\p{Script=Han}]+|[^\p{Script=Han}]+/gu) ?? [])`）；② `every` 改 `some`。排序仍按「命中名字 ×10」、结果上限 20 条兜底，故放宽召回不等于失控；**已知副作用**（未消除）：泛用短词会带进弱相关结果（自测里查询的 `use` 把 `pdf` 也召回了），靠排序区分，未加词长过滤。**自建版 app 必须重新打包才生效**——它读的是本仓库源码经 `build-app.sh` 组装进 `app.asar` 的副本，改工作区源码不影响已安装的 app，且 `build-app.sh` 第 6 步会把本文件覆盖到 TUI 的 `~/.dsh/.agent-presets/liangshen/`，权威源落后会把 TUI 侧回退成旧版。**四份副本须同内容**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、官网版 app 内、`~/.dsh/.agent-presets/liangshen/`；只改后三份会漏掉自建版 app（它由本仓库构建） |
 | `apps/desktop/src/profile-packages.ts`、`apps/desktop/src/project-manager.ts`、`apps/desktop/tests/project-manager.spec.ts` | **link→runtime 迁移兜底**（坑 20）：上游 0.1.6-alpha.1 起宿主包改由 app.asar 内运行时提供（`profileResolution: 'runtime'`），但旧 profile 里 link 模式遗留的软链指向随新包被替换掉的 `Contents/Resources/dsh`，悬空后会让 `validateDesktopPluginGraph` 报 `invalid installed package` 并**直接挡住启动**（09-15 实际发生）。新增 `unlinkBrokenDesktopHostPackages()`——只清理「有归属记录、当前是软链、且链接目标已不存在」的条目，并在 `applyRelease()` 的 early-exit 判断**之前**调用（二次启动时 state 已被改写，只有这一层能兜住）；state 里的 links 记录保留，供降级/后续清理使用 |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
-| `apps/desktop-host/config/desktop.cordis.patch.yml`（新增 1 段） | **开启会话内容全文搜索**：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层是最后应用的最高优先级 patch 且随 app 打包分发，在此覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。选这里而非 profile 的 `cordis.patch.yml`，是因为 profile 目录被 `~/.dsh` 的 `.gitignore` 排除、换机与重置 Desktop 都会丢 |
+| `apps/desktop-host/config/desktop.cordis.patch.yml`（仅保留 1 段）+ `apps/desktop-host/src/index.ts` | **开启会话内容全文搜索**（2026-09-21 改接法）：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。**0.1.6-alpha.2 起上游把 desktop-host 改成共享 Web 运行时的薄壳并删掉了自动加载该文件的逻辑**，因此改为：`index.ts` 里 `const DESKTOP_PATCH = fileURLToPath(new URL('../config/desktop.cordis.patch.yml', import.meta.url))`，并把它放进 `runProfile({ patchFiles: [DESKTOP_PATCH] })` —— patch overlay 排在 profile 自身与 home 级 patch 之后，优先级与改造前一致。文件要随运行时分发：`apps/desktop-host/package.json` 的 `files` 与 `apps/desktop/src/core-package-set.ts` 的 `DESKTOP_HOST_RUNTIME_FILES` 都已登记；`prepare-dsh.ts` 的 `carryDesktopPatch()` 在生成哈希清单前把它拷进 `.desktop-build` 的运行时树。**不要**改走 profile 的 `cordis.patch.yml`：该目录被 `~/.dsh` 的 `.gitignore` 排除、换机与「禁用第三方插件并重启」都会被清掉 |
 | `packages/client/ui-theme/src/styles/claude-desktop.css`（新增）、`packages/client/ui-theme/src/client/styles.ts` | **Claude Desktop 主题（仅浅色）**：新增 fork 专属样式表，并在 `styles.ts` 的 `STYLES` 数组**末尾**挂载——挂载顺序决定层叠，同特异性的声明以本表为准；不改任何上游样式表内容。落地的五项：① 代码字号 11px（代码块）/ 12px（行内）→ **14px / 行高 20px**（09-15 由 15px 下调，对齐 DSH Desktop 侧），改的是 `--dsw-font-markdown-code-block`，它同时被 CodeBlock、TerminalBlock、DiffBlock、ReadBlock 消费，一处覆盖即全局生效；② 代码字体族统一为 Claude 的 `"SF Mono", ui-monospace, Menlo` 栈；③ 标题层级收敛为 22 / 18 / 16px + 600 字重（原 21 / 19 / 18px + 700），仍走 `--dsh-content-font-delta` 跟随字号设置；④ 代码块改白色卡片（8px 圆角 + 1px 浅描边，用 `CodeBlock.tsx` 挂出的稳定全局类 `md-code-block` 命中）；⑤ 语法高亮换 claude.ai 截图像素实测五色（`--shiki-token-*`）。**刻意不动**：正文字号 `--dsh-content-font-size`、正文字体族 `--dsw-font-family`（用户要求「只调整代码字体」）。深色模式（`body[data-ds-dark-theme]`）保持 DSH 原样。参数取自 Claude Desktop 1.52386.6 应用包内的 CDS 令牌（`--cds-*`，`data-density=comfortable`）与 claude.ai 渲染截图实测 |
 | `packages/client/ui-theme/src/theme-settings.ts`、`src/client/index.ts`、`src/client/settings-store.ts`、`src/client/AppearanceRow.tsx`、`src/client/locales.ts` | **主题皮肤开关**（09-15）：`ui-theme` 的持久化设置新增 `skin` 字段（`'default' \| 'claude'`，缺该字段的旧设置文档解析为 `default`）；外观设置行多一组「主题皮肤」按钮；`styles.ts` 的皮肤表随它挂载/卸载，切回「默认」即恢复 DSH 原生外观。**主题 CSS 与 DSH Desktop 侧是同一份文件、逐字一致（sha256 相同），同步方式＝`cp` 覆盖**。连带改动：`installThemeStyles` 多收一个 `readSkin` 参数，调用点从 `apply()` 开头移到 `ThemeRuntime` 创建之后——皮肤表要在挂载时读到已持久化的 skin |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
@@ -342,6 +342,41 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
   241 → 0，主进程 + Renderer + `dsh-desktop-host` 后端三个进程都在，启动失败页不再出现。
 - **排查口诀**：这类「profile 校验失败」先看**报错路径本身是不是悬空软链**
   （`ls -la` 看箭头、`readlink -f` 看目标是否存在），再对照本节第三节的改动清单，别急着用恢复选项。
+
+### 坑 21：上游 `prepare:desktop` 无条件要求 Apple 证书（09-21 起）
+
+- **现象**：`pnpm run prepare:desktop`（= `apps/desktop` 的 `prepare:package` → `package-target.ts --prepare-only`）
+  在**编译开始前**就退出：`desktop package: cannot read .../apps/desktop/.env.macos`，
+  或补上 `.env.macos` 后继续报 `DSH_DESKTOP_MACOS_SIGNING_IDENTITY must be set to a non-empty value` /
+  `DSH_DESKTOP_MACOS_TEAM_ID must be set to a non-empty value` / `CSC_LINK must identify a readable local file`。
+- **根因**：上游 0.1.6-alpha.2 起 `validateDesktopPackageEnvironment()` 在 `--prepare-only` 分支也会
+  走 `resolveMacOSSigningEnvironment()` + 公证策略校验；只有 `--unsigned` 才会提前返回，而
+  `--unsigned` 被限制为只能用于 `win-x64`。本机自用没有 Developer ID 证书，官方入口无法产出 `.app`。
+- **解法**：`packaging/build-app.sh` 的全量分支**不再调用** `pnpm run prepare:desktop`，而是按
+  `package-target.ts` 的同一顺序逐个调用 prepare 脚本（`build:official` → `release:pack --family dsh`
+  → `apps/desktop-host` 的 `pack` → `release:pack --family vendor` → landlock 的 `build:ts` + `pack`
+  → `prepare:runtime` → `prepare:packages` → `prepare:dsh`），并补一个被上游 gitignore 的
+  `apps/desktop/.env.macos`（应用 ID、更新/策略 origin 的 HTTPS 占位值即可，签名与公证字段留空）。
+  签名仍由该脚本第 4 步的 ad-hoc 签名完成。
+
+### 坑 22：`tsdown` 报 `[@deepseek-ai/dsh-root] Cannot find entry`（孤立包目录导致）
+
+- **现象**：全量打包在 `build:official` 的 `tsdown --env.DSH_BUILD_FACE host` 阶段失败，
+  报 `Cannot find entry: ["lib/types/{index,invariant,startup}.js"]`，前缀却是仓库根包名
+  `@deepseek-ai/dsh-root`，而根目录并没有 `src/`。
+- **根因**：仓库里残留了**上游已经移走的包目录**（本次是 `packages/fs/tool-present`，
+  上游已改到 `packages/deliverables/tool-present`）。它只剩 `node_modules/` 与旧的
+  `lib/types/`，没有 `package.json`；`tsdown` 在 `packages/*/*` 的 workspace 匹配里仍把它当成员，
+  `readPackageJson` 向上走到仓库根读到 `@deepseek-ai/dsh-root`，于是按根的名字报错。
+  同一类还有「上游删包后遗留的旧 `lib/`」，会让 `transform-corpus` 的
+  「every built bundle imports」误报 `UNEXPECTED BASELINE FAILURE`。
+- **解法**：把这类目录整体移出仓库（本次移到 `/tmp/dsh-stale-20260921/`），再重建。
+  下次同步后如果 `tsdown` 又报根包名找不到入口，**先查 `packages/*/*` 下有没有 `git ls-files` 为空、
+  且没有 `package.json` 的残留目录**：
+  `for d in packages/*/*; do [ -d "$d" ] && [ "$(git ls-files "$d" | wc -l)" -eq 0 ] && echo "$d"; done`。
+- **附带**：`apps/desktop/.desktop-build` 被清空后，各包 `lib/` 也可能已被删而 `*.tsbuildinfo` 还在，
+  此时 `tsc -b` 会认为「已是最新」而不重新 emit；需要先删掉这些 tsbuildinfo 再构建
+  （`find . -name '*.tsbuildinfo' -not -path './node_modules/*' -delete`）。
 
 ## 五、换机恢复清单
 
