@@ -16,6 +16,7 @@ export const DESKTOP_HOST_PACKAGE = '@deepseek-ai/dsh-desktop-host'
 /** Package-relative Desktop Host files required before a profile can boot. */
 export const DESKTOP_HOST_RUNTIME_FILES = [
   'lib/index.js',
+  // 二次开发：本 fork 的 Desktop 覆盖层 patch 由 lib/index.js 以 overlay 形式加载。
   'config/desktop.cordis.patch.yml',
 ] as const
 

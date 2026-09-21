@@ -4,6 +4,7 @@ import { spawn, execFile, execFileSync } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
+import { desktopNodeEnvironment } from '../src/node-environment.ts'
 import { createRuntimeProjectMetadata } from '../src/project-manager.ts'
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
 import { parseDesktopRelease, type DesktopRelease } from '../src/release.ts'
@@ -15,6 +16,7 @@ import {
   readDesktopCorePackageSet,
   verifyDesktopCoreLockfile,
 } from '../src/core-package-set.ts'
+import { smokePrimaryRuntime } from './prepare-primary-runtime.ts'
 import { smokeDesktopRuntime } from './smoke-runtime.ts'
 import { writeDesktopRuntime, verifyDesktopRuntime } from '../src/runtime-tree.ts'
 import {
@@ -26,6 +28,7 @@ import {
 } from './macos-runtime.ts'
 import { resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { desktopRuntimeFileExclusion } from './runtime-file-policy.ts'
+import { selectOfficeEngine } from '../../../scripts/libreoffice-engine.ts'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const BUILD_PATHS = resolveDesktopTargetBuildPaths()
@@ -35,7 +38,7 @@ const STORE_ROOT = join(BUILD_ROOT, 'store')
 const RUNTIME_ROOT = BUILD_PATHS.runtime
 const PNPM_BUILD_STATE = BUILD_PATHS.dshPnpm
 const PACKAGE_SET_ROOT = BUILD_PATHS.packageSet
-const NODE = join(RUNTIME_ROOT, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+const NODE = join(BUILD_PATHS.electron, process.platform === 'win32' ? 'electron.exe' : 'Electron.app/Contents/MacOS/Electron')
 const PNPM = join(RUNTIME_ROOT, 'pnpm', 'bin', 'pnpm.mjs')
 
 /**
@@ -78,6 +81,7 @@ function runPnpm(args: readonly string[]): Promise<void> {
     mkdirSync(config, { recursive: true })
     writeFileSync(userConfig, '')
     const child = spawn(NODE, [
+      '--expose-internals',
       PNPM,
       `--config.registry=${REGISTRY}`,
       `--config.store-dir=${STORE_ROOT}`,
@@ -94,7 +98,8 @@ function runPnpm(args: readonly string[]): Promise<void> {
         NPM_CONFIG_REGISTRY: REGISTRY,
         NPM_CONFIG_STORE_DIR: STORE_ROOT,
         NPM_CONFIG_USERCONFIG: userConfig,
-        PATH: `${dirname(NODE)}${delimiter}${process.env.PATH ?? ''}`,
+        ...desktopNodeEnvironment(NODE, join(RUNTIME_ROOT, 'bin'), {}),
+        PATH: `${join(RUNTIME_ROOT, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
         XDG_CACHE_HOME: join(PNPM_BUILD_STATE, 'cache'),
         XDG_CONFIG_HOME: config,
         XDG_STATE_HOME: join(PNPM_BUILD_STATE, 'state'),
@@ -150,6 +155,26 @@ function applyRuntimePatches(runtimeRoot: string): void {
   }
 }
 
+/**
+ * Carry the fork's Desktop overlay patch into the runtime tree.
+ *
+ * 二次开发：上游 0.1.6-alpha.2 起把 desktop-host 的 profile 组装交给共享 Web 运行时，
+ * 删掉了原来随包分发的 `config/desktop.cordis.patch.yml`。本 fork 的会话内容全文搜索
+ * 开关原先写在那份 patch 里，现在改为由 desktop-host 以 patch overlay 显式加载（见
+ * apps/desktop-host/src/index.ts 的 DESKTOP_PATCH）。文件必须随运行时一起分发，且必须
+ * 在 writeDesktopRuntime 生成哈希清单之前就位，否则启动时的完整性校验会判定资源被篡改。
+ * @param runtimeRoot - the assembled runtime root about to be described and verified.
+ */
+function carryDesktopPatch(runtimeRoot: string): void {
+  const target = join(runtimeRoot, 'node_modules', DESKTOP_HOST_PACKAGE, DESKTOP_PATCH_FILE)
+  mkdirSync(dirname(target), { recursive: true })
+  copyFileSync(join(APP_ROOT, '..', 'desktop-host', 'config', 'desktop.cordis.patch.yml'), target)
+  process.stdout.write(`desktop runtime: carried ${DESKTOP_PATCH_FILE} for ${DESKTOP_HOST_PACKAGE}\n`)
+}
+
+/** Runtime-relative path of the fork's Desktop overlay patch. */
+const DESKTOP_PATCH_FILE = join('config', 'desktop.cordis.patch.yml')
+
 async function main(): Promise<void> {
   rmSync(DSH_OUTPUT_ROOT, { recursive: true, force: true })
   rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
@@ -169,10 +194,12 @@ async function main(): Promise<void> {
     const targetName = resolveDesktopBuildTarget()
     const target = { platform: process.platform, arch: targetName.endsWith('arm64') ? 'arm64' : 'x64' }
     const modules = join(BUILD_ROOT, 'node_modules')
+    const officeManifest = JSON.parse(readFileSync(join(modules, '@deepseek-ai/libreoffice-kit/package.json'), 'utf8'))
+    const officeEngine = selectOfficeEngine(officeManifest, target)
     mkdirSync(DSH_OUTPUT_ROOT, { recursive: true })
     cpSync(modules, join(DSH_OUTPUT_ROOT, 'node_modules'), {
       recursive: true, dereference: true,
-      filter: source => desktopRuntimeFileExclusion(relative(modules, source), target) === undefined,
+      filter: source => desktopRuntimeFileExclusion(relative(modules, source), target, officeEngine) === undefined,
     })
     writeFileSync(join(DSH_OUTPUT_ROOT, 'package.json'), `${JSON.stringify({
       name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: release.version, type: 'module',
@@ -183,8 +210,12 @@ async function main(): Promise<void> {
         throw new Error(`desktop runtime: missing private Host file ${file}`)
       }
     }
+    if (!existsSync(join(DSH_OUTPUT_ROOT, 'node_modules', '@deepseek-ai', `libreoffice-kit-${officeEngine}`, 'prebuilds.json'))) {
+      throw new Error(`desktop runtime: missing required LibreOffice engine ${officeEngine}`)
+    }
     // 必须在 writeDesktopRuntime 生成哈希清单之前执行。
     applyRuntimePatches(DSH_OUTPUT_ROOT)
+    carryDesktopPatch(DSH_OUTPUT_ROOT)
     // 二次开发：仅在配置了签名身份时才预签名运行时。
     // 上游在 macOS 上无条件签名并要求 Apple 证书；本机自用（不签名、不公证、不分发）
     // 时该步骤无法完成也并非必需——本地构建的文件不带 quarantine 属性，可直接双击运行，
@@ -193,12 +224,14 @@ async function main(): Promise<void> {
     const configuredSigningIdentity = process.env.DSH_DESKTOP_MACOS_SIGNING_IDENTITY?.trim()
     if (process.platform === 'darwin' && configuredSigningIdentity !== undefined && configuredSigningIdentity !== '') {
       await signMacOSRuntime(DSH_OUTPUT_ROOT, resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env))
+      await signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env))
     }
+    smokePrimaryRuntime(join(RUNTIME_ROOT, 'primary-runtime'))
     writeDesktopRuntime(DSH_OUTPUT_ROOT, release, packageSet.packages.map(entry => entry.name), target)
     const descriptor = await verifyDesktopRuntime(DSH_OUTPUT_ROOT, release.version, target)
     await new Promise<void>((accept, reject) => {
-      execFile(NODE, [join(APP_ROOT, 'tests/fixtures/runtime-payload-smoke.mjs'), DSH_OUTPUT_ROOT],
-        { timeout: 120_000, env: { ...process.env, NODE_OPTIONS: '' } }, (error, stdout, stderr) => {
+      execFile(NODE, ['--expose-internals', join(APP_ROOT, 'tests/fixtures/runtime-payload-smoke.mjs'), DSH_OUTPUT_ROOT],
+        { timeout: 120_000, env: desktopNodeEnvironment(NODE, join(RUNTIME_ROOT, 'bin'), { ...process.env, NODE_OPTIONS: '' }) }, (error, stdout, stderr) => {
           if (error !== null) reject(new Error(`desktop native payload smoke failed: ${stderr}`, { cause: error }))
           else { process.stdout.write(stdout); accept() }
         })
