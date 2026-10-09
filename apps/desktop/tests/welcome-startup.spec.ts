@@ -64,6 +64,8 @@ vi.mock('electron', () => ({
     on: (name: string, callback: (...args: unknown[]) => void) => { state.appListeners.set(name, callback) },
     quit: state.quit,
     exit: vi.fn(),
+    // 二次开发：fork 的焦点路径在 darwin 上会调 app.show()（把被隐藏的 app 显形）。
+    show: vi.fn(),
   },
   powerMonitor: { on: vi.fn(), off: vi.fn() },
   BrowserWindow: class {
