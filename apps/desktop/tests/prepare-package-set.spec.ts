@@ -78,11 +78,12 @@ describe('desktop package-set selection', () => {
     ])
   })
 
-  it('requires the Desktop Host entry', () => {
+  it('requires both Desktop Host and public CLI entries', () => {
     const files = [
       'package/lib/index.js',
       // 二次开发：fork 的 Desktop 覆盖层 patch 随运行时分发，必须出现在 tarball 清单里。
       'package/config/desktop.cordis.patch.yml',
+      'package/lib/cli.js',
     ]
     expect(() => {
       assertDesktopHostPackageFiles(files)
@@ -90,5 +91,6 @@ describe('desktop package-set selection', () => {
     expect(() => {
       assertDesktopHostPackageFiles(files.slice(1))
     }).toThrow(/lib\/index\.js/u)
+    expect(() => { assertDesktopHostPackageFiles(files.slice(0, 1)) }).toThrow(/lib\/cli\.js/u)
   })
 })

@@ -1,0 +1,112 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 5dd85f19db51b73dcd0c5c4cd8c28ad99e09ee6f..e94fa7784bbe0b8972ec47a9088de6bf52ac4d4c 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -507,7 +507,6 @@ export const stream = (model, context, options) => {
+                         const block = blocks[index];
+                         if (block && block.type === "toolCall") {
+                             block.partialJson += event.delta.partial_json;
+-                            block.arguments = parseStreamingJson(block.partialJson);
+                             stream.push({
+                                 type: "toolcall_delta",
+                                 contentIndex: index,
+diff --git a/dist/api/bedrock-converse-stream.js b/dist/api/bedrock-converse-stream.js
+index 44e3f13e808f0665a44e34437e173743f81bd51f..6c4899b29efeec46a67e1b9c1403677c66200a81 100644
+--- a/dist/api/bedrock-converse-stream.js
++++ b/dist/api/bedrock-converse-stream.js
+@@ -459,7 +459,6 @@ function handleContentBlockDelta(event, blocks, output, stream) {
+     }
+     else if (delta?.toolUse && block?.type === "toolCall") {
+         block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
+-        block.arguments = parseStreamingJson(block.partialJson);
+         stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
+     }
+     else if (delta?.reasoningContent) {
+diff --git a/dist/api/mistral-conversations.js b/dist/api/mistral-conversations.js
+index 3106c5d470dc3610c05d8ee153026df20f86f66e..c54c1b5dc525715c7b9dc4e780cd74b497f0671d 100644
+--- a/dist/api/mistral-conversations.js
++++ b/dist/api/mistral-conversations.js
+@@ -541,7 +541,6 @@ async function consumeChatStream(model, output, stream, mistralStream) {
+                 ? toolCall.function.arguments
+                 : JSON.stringify(toolCall.function.arguments || {});
+             block.partialArgs = (block.partialArgs || "") + argsDelta;
+-            block.arguments = parseStreamingJson(block.partialArgs);
+             stream.push({
+                 type: "toolcall_delta",
+                 contentIndex: toolBlocksByKey.get(key),
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index fc8e89382b75f259eb4f041b522840b0d603c033..f5acd00ff7c0e4db054abfcd1b9e5ac4a6005959 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -437,7 +437,6 @@ export const stream = (model, context, options) => {
+                             if (toolCall.function?.arguments) {
+                                 delta = toolCall.function.arguments;
+                                 block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+-                                block.arguments = parseStreamingJson(block.partialArgs);
+                             }
+                             else if (toolCall.custom?.input) {
+                                 const nextInput = getCustomToolCallInput(block) + toolCall.custom.input;
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+index 53597d2c3becdd2c03d4fd265c213a36b403f26b..0aa5752a3e4bad3c0c5aa04d0405448e0fa488be 100644
+--- a/dist/api/openai-responses-shared.js
++++ b/dist/api/openai-responses-shared.js
+@@ -546,7 +546,6 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             if (!slot || slot.block.partialJson === undefined)
+                 continue;
+             slot.block.partialJson += event.delta;
+-            slot.block.arguments = parseStreamingJson(slot.block.partialJson);
+             pushToolCallDelta(slot, event.delta);
+         }
+         else if (event.type === "response.function_call_arguments.done") {
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 1396c8d57ffb0e300382281a026d878e6a96b43a..ce6205b5a18e2c9f9fbf990ac41bcc2b86199b69 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -236,11 +236,29 @@ function buildParams(model, context, options, compat = getCompat(model), grammar
+     if (options?.serviceTier !== undefined) {
+         params.service_tier = options.serviceTier;
+     }
+-    if (transcriptTools.requestTools.length > 0) {
+-        params.tools = convertResponsesTools(transcriptTools.requestTools, {
+-            supportsStrictMode: compat.supportsStrictMode,
+-            supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
+-        });
++    // 二次开发：通过环境变量 RESPONSES_NATIVE_TOOLS 附加服务端原生工具
++    // （例如 web_search：由模型服务端执行搜索，而不是由 harness 调用本地工具）。
++    // 未设置该变量时行为与上游完全一致。
++    const nativeToolTypes = typeof process === "undefined" ? undefined : process.env?.RESPONSES_NATIVE_TOOLS;
++    const nativeTools = typeof nativeToolTypes === "string" && nativeToolTypes.trim().length > 0
++        ? nativeToolTypes.split(",").map((type) => type.trim()).filter((type) => type.length > 0).map((type) => ({ type }))
++        : [];
++    // 二次开发：剔除与服务端原生工具同名的 function 工具。
++    // 公司网关要求工具名唯一，而 harness 自带名为 web_search 的 function 工具，
++    // 与透传的 {"type":"web_search"} 撞名会返回
++    // invalid_prompt: Tool names must be unique。同名时以服务端工具为准。
++    const nativeNames = new Set(nativeTools.map((tool) => tool.type));
++    const requestTools = nativeNames.size === 0
++        ? transcriptTools.requestTools
++        : transcriptTools.requestTools.filter((tool) => !nativeNames.has(tool.name));
++    if (requestTools.length > 0 || nativeTools.length > 0) {
++        params.tools = [
++            ...convertResponsesTools(requestTools, {
++                supportsStrictMode: compat.supportsStrictMode,
++                supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
++            }),
++            ...nativeTools,
++        ];
+     }
+     if (options?.toolChoice !== undefined) {
+         params.tool_choice = options.toolChoice;
+diff --git a/dist/api/pi-messages.js b/dist/api/pi-messages.js
+index ad5f4605e8e157f12b8948e88e0c66e8a5494fc4..5609d61b49264b26fc86a787ec19780d29cdfcab 100644
+--- a/dist/api/pi-messages.js
++++ b/dist/api/pi-messages.js
+@@ -155,8 +155,6 @@ function createEventConverter(model) {
+             case "toolcall_delta": {
+                 const json = `${toolJson.get(event.contentIndex) ?? ""}${event.delta}`;
+                 toolJson.set(event.contentIndex, json);
+-                partial.content[event.contentIndex].arguments =
+-                    parseStreamingJson(json);
+                 break;
+             }
+             case "toolcall_end":

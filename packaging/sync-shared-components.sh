@@ -2,7 +2,7 @@
 # 把仓库源码里的「共用组件」分发到其它前端的运行副本。
 #
 # 为什么需要：DSH 两个前端共用同一批注入组件，但运行副本各自独立。
-#   Electron：app 内置 <app>/Contents/Resources/dsh/node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/
+#   Electron：app 内置 <app>/Contents/Resources/dsh/node_modules/@deepseek-ai/dsh-web-app/presets/
 #             —— 由 build-app.sh 打包时从 packages/ 带过去，本脚本不处理（改 app 内文件会破坏签名）
 #   dsh-tui ：~/.dsh/.agent-presets/liangshen/
 #             —— TUI 包安装时生成的副本，改仓库源码不会自动更新，需要本脚本补齐
@@ -25,8 +25,8 @@ while [ -L "$SOURCE" ]; do
 done
 REPO_ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 
-# 权威源：仓库源码里的 standard preset
-SRC_DIR="$REPO_ROOT/packages/preset/agent-presets/presets/standard"
+# 权威源：仓库源码里的 web-app 预设目录（0.2.x 起上游把 preset 组合搬到 bundle 包里）
+SRC_DIR="$REPO_ROOT/packages/bundle/web-app/presets"
 # 分发目标：TUI 的运行副本
 TUI_PRESET_DIR="${DSH_HOME:-$HOME/.dsh}/.agent-presets/liangshen"
 # 共用组件清单（两侧同源、必须保持一致的文件）
