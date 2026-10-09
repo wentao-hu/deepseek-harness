@@ -166,7 +166,8 @@ function runtimeResources(): RuntimeResources {
   // 二次开发：本地插件副本必须放在 Resources/dsh 之外——verifyDesktopRuntime 会对
   // 运行时目录做全量文件清单比对，多一个目录即判定资源被篡改。
   const localPlugins = (development ? process.env.DSH_DESKTOP_LOCAL_PLUGINS_DIR : undefined)
-    ?? join(process.resourcesPath, 'local-plugins')
+    // 未打包时（开发/测试进程）没有 resourcesPath，退回 app 目录即可——真实打包产物一定有。
+    ?? join(process.resourcesPath ?? app.getAppPath(), 'local-plugins')
   return { node, nodeBin, pnpm, dsh, localPlugins, ...(development ? {} : { profileResolution: 'runtime' }) }
 }
 

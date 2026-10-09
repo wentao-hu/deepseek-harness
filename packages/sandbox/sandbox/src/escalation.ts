@@ -89,7 +89,11 @@ export function normalizeEscalationRequest(
   if (mode === undefined && reason === undefined) return undefined
   // 到这里说明模型确实表达了提权意图，只是可能漏填了其中一半——原样交回
   // `validateEscalationArgs` 报错让它补齐，而不是静默降级成一次没有审批依据的调用。
-  return { mode, justification: reason }
+  // 合法模式 + 空白 justification：保留原始空串，让报错文案保持上游口径
+  // （`invalid justification: expected a non-empty sentence`，而非「缺少 justification」）。
+  const blankJustification = mode !== undefined
+    && typeof justification === 'string' && justification.trim().length === 0
+  return { mode, justification: blankJustification ? justification : reason }
 }
 
 /** 二次开发：模型替「本次用不到」的字段填的占位词（与 pi-ai 适配层同口径）。 */

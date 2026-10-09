@@ -489,6 +489,8 @@ export function validateArgs(spec: ParameterSchemaSpec, args: unknown): string[]
  *
  * 只摘可选字段（`required: true` 上的空值照旧报错，那是真的漏填），且只摘 `null` 与纯空白串：
  * 字符串 `"null"` 可能是别处的真实内容（例如 `edit` 要替换的字面量 `null`）。
+ * 对象 / 数组 / json 型选项**不摘**：把 `null` 摘掉等于抹掉「这个选择器被提供了」这一语义
+ * （`schedule_create` 的 `cron: null` 必须照旧被参数校验拒绝），这类字段回落到原有校验路径。
  * @param spec - declared parameter schema.
  * @param args - candidate arguments, however malformed.
  * @returns the arguments with blank optional members removed, or the input unchanged.
@@ -499,6 +501,8 @@ function withoutBlankOptionalArgs(spec: ParameterSchemaSpec, args: unknown): unk
   const isBlank = (key: string, value: unknown): boolean => {
     const property = spec[key]
     if (property === undefined || property.required === true) return false
+    const type = (property as { type?: string }).type
+    if (type === 'object' || type === 'array' || type === 'json') return false
     return value === null || (typeof value === 'string' && value.trim().length === 0)
   }
   const entries = Object.entries(record)

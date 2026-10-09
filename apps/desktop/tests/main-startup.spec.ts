@@ -166,6 +166,8 @@ const harness = await vi.hoisted(async () => {
     exit: vi.fn(),
     relaunch: vi.fn(),
     focus: vi.fn(),
+    // 二次开发：fork 的焦点路径在 darwin 上会调 app.show()（把被隐藏的 app 显形）。
+    show: vi.fn(),
     quit: vi.fn(() => {
       const event = { preventDefault: vi.fn() }
       app.emit('before-quit', event)
