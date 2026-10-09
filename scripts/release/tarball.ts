@@ -47,6 +47,8 @@ export function captureTarball(
  * @returns Every path inside the archive.
  */
 export function tarballFiles(tarball: string): string[] {
+// 采纳 main 的等价实现（cwd 跑在 tarball 旁，避开盘符被当主机名），
+  // 统一走 captureTarball 封装，避免同一坑写两遍。
   return captureTarball(tarball, ['-tzf']).split(/\r?\n/u).filter(line => line !== '')
 }
 
@@ -56,6 +58,7 @@ export function tarballFiles(tarball: string): string[] {
  * @returns The name and version the tarball declares.
  */
 export function packedIdentity(tarball: string): PackedIdentity {
+// 同上：main 的内联写法与 captureTarball 等价，统一走封装。
   const manifest: unknown = JSON.parse(captureTarball(tarball, ['-xOzf'], ['package/package.json']))
   if (manifest === null || typeof manifest !== 'object') throw new Error(`${tarball} has no manifest`)
   const { name, version } = manifest as Record<string, unknown>

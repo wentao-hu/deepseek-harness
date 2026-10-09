@@ -65,7 +65,26 @@ elif [ -n "$TARBALL_REF" ] \
   cd "$REPO_ROOT"
 else
   echo "    packages/ 或 apps/desktop-host 有更新 → 全量重建"
-  pnpm run prepare:desktop
+  # 不走上游的 `prepare:desktop`（= apps/desktop 的 prepare:package → package-target.ts）：
+  # 上游 0.1.6-alpha.2 起该入口无条件先做 macOS 签名预检（要求 CSC_LINK 指向真实
+  # Developer ID 证书、Team ID 与私钥口令），本机自用没有证书，会在编译开始前就退出；
+  # 其 `--unsigned` 又只允许 win-x64。这里按 package-target.ts 的同一顺序逐个调用
+  # prepare 脚本：build:official → release:pack → desktop-host pack → vendor pack →
+  # landlock → prepare:runtime → prepare:packages → prepare:dsh，绕开签名预检。
+  # 每一步与上游一致，签名仍由本脚本第 4 步的 ad-hoc 签名负责。
+  pnpm run build:official
+  pnpm run release:pack --family dsh --out "$PACKED_DSH"
+  pnpm --dir apps/desktop-host pack --pack-destination "$PACKED_DSH"
+  pnpm run release:pack --family vendor --out "$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/packed/vendor"
+  rm -rf "$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/packed/landlock"
+  mkdir -p "$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/packed/landlock"
+  pnpm --dir native/system run build:ts
+  pnpm --dir native/system/packages/entry pack --pack-destination "$REPO_ROOT/apps/desktop/.desktop-build/targets/mac-arm64/packed/landlock"
+  # 这三个脚本定义在 apps/desktop/package.json，上游通过 package-target.ts 以
+  # cwd=apps/desktop 调用；这里显式指定 --dir，语义与上游一致。
+  pnpm --dir apps/desktop run prepare:runtime
+  pnpm --dir apps/desktop run prepare:packages
+  pnpm --dir apps/desktop run prepare:dsh
 fi
 
 echo "==> [2/6] electron-builder 打包（未签名）"

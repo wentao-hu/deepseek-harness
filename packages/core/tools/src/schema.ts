@@ -489,6 +489,8 @@ export function validateArgs(spec: ParameterSchemaSpec, args: unknown): string[]
  *
  * 只摘可选字段（`required: true` 上的空值照旧报错，那是真的漏填），且只摘 `null` 与纯空白串：
  * 字符串 `"null"` 可能是别处的真实内容（例如 `edit` 要替换的字面量 `null`）。
+ * 对象 / 数组 / json 型选项**不摘**：把 `null` 摘掉等于抹掉「这个选择器被提供了」这一语义
+ * （`schedule_create` 的 `cron: null` 必须照旧被参数校验拒绝），这类字段回落到原有校验路径。
  * @param spec - declared parameter schema.
  * @param args - candidate arguments, however malformed.
  * @returns the arguments with blank optional members removed, or the input unchanged.
@@ -499,6 +501,8 @@ function withoutBlankOptionalArgs(spec: ParameterSchemaSpec, args: unknown): unk
   const isBlank = (key: string, value: unknown): boolean => {
     const property = spec[key]
     if (property === undefined || property.required === true) return false
+    const type = (property as { type?: string }).type
+    if (type === 'object' || type === 'array' || type === 'json') return false
     return value === null || (typeof value === 'string' && value.trim().length === 0)
   }
   const entries = Object.entries(record)
@@ -523,6 +527,8 @@ export interface DefineToolOptions<S extends ParameterSchemaSpec, O extends Valu
     /** Pure replayable presentation metadata for direct top-level calls. */
     presentationMeta?(args: InferArgs<S>, value: InferValue<NoInfer<O>>): JsonValue
   }
+  /** Requests deferred loading of the tool definition; see {@link @deepseek-ai/dsh-llm#ToolSchema.deferLoading}. */
+  readonly deferLoading?: true
   /** Optional positive cooperative timeout budget in milliseconds. */
   readonly timeoutMs?: number
   /**
@@ -538,6 +544,13 @@ export interface DefineToolOptions<S extends ParameterSchemaSpec, O extends Valu
    * @returns The canonical value declared by `output.schema`.
    */
   execute(args: InferArgs<S>, exec: ToolRunContext): Promise<InferValue<NoInfer<O>>>
+  /**
+   * Install execution-prepared content before result policies.
+   * @param exec - immutable execution identity and arguments.
+   * @param result - normalized outcome entering post-execute.
+   * @returns replacement content, or undefined to preserve it.
+   */
+  projectContent?(exec: Readonly<ToolExecution>, result: Readonly<ToolExecutionResult>): ContentBlock[] | undefined
   /**
    * Optional last-mile content transform for every normalized outcome. Unlike
    * `execute`, arguments remain `unknown` because invalid-input failures also
@@ -578,6 +591,8 @@ export function defineTool<const S extends ParameterSchemaSpec, const O extends 
   // oxlint-disable-next-line typescript/unbound-method
   const userFinalizeContent = options.finalizeContent
   // oxlint-disable-next-line typescript/unbound-method
+  const userProjectContent = options.projectContent
+  // oxlint-disable-next-line typescript/unbound-method
   const userRender = options.output.render
   // oxlint-disable-next-line typescript/unbound-method
   const userPresentationMeta = options.output.presentationMeta
@@ -602,20 +617,24 @@ export function defineTool<const S extends ParameterSchemaSpec, const O extends 
     output: {
       schema: outputSchema,
       render(args: unknown, value: JsonValue): ContentBlock[] {
-        return userRender(args as InferArgs<S>, value as unknown as InferValue<NoInfer<O>>)
+        return userRender(args as InferArgs<S>, value as InferValue<NoInfer<O>>)
       },
       ...userPresentationMeta !== undefined ? {
         presentationMeta(args: unknown, value: JsonValue): JsonValue {
-          return userPresentationMeta(args as InferArgs<S>, value as unknown as InferValue<NoInfer<O>>)
+          return userPresentationMeta(args as InferArgs<S>, value as InferValue<NoInfer<O>>)
         },
       } : {},
     },
+    ...(options.deferLoading === true ? { deferLoading: options.deferLoading } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     async execute(args: unknown, exec: ToolRunContext): Promise<JsonValue> {
       const violations = validate(args)
       if (violations.length > 0) throw new ToolArgsError(violations)
       return userExecute(args as InferArgs<S>, exec) as Promise<JsonValue>
     },
+  }
+  if (userProjectContent) {
+    tool.projectContent = (exec, result) => userProjectContent(exec, result)
   }
   if (userFinalizeContent) {
     tool.finalizeContent = (exec, result) => userFinalizeContent(exec, result)

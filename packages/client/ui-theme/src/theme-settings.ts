@@ -33,10 +33,10 @@ export const DEFAULT_PREFERENCE: ThemePreference = 'system'
 export const DEFAULT_SKIN: ThemeSkin = 'default'
 
 /** Smallest accepted content font size (px). */
-export const FONT_SIZE_MIN = 12
+export const FONT_SIZE_MIN = 10
 
 /** Largest accepted content font size (px). */
-export const FONT_SIZE_MAX = 17
+export const FONT_SIZE_MAX = 22
 
 /** Content font size when the user-settings document has no override (px). */
 export const DEFAULT_FONT_SIZE = 14

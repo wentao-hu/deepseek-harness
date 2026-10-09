@@ -14,12 +14,30 @@
  */
 
 // 官方 createElectronBuilderConfig() 在模块求值阶段就校验这些变量，
-// 因此必须在 import 官方模块之前提供占位值。已存在的真实值不会被覆盖。
-process.env.DSH_DESKTOP_APP_ID ??= 'com.sankuai.dsh'
-process.env.DSH_DESKTOP_MACOS_SIGNING_IDENTITY ??= 'DSH-LOCAL-UNSIGNED'
-process.env.DSH_DESKTOP_MACOS_TEAM_ID ??= '0000000000'
-process.env.APPLE_KEYCHAIN_PROFILE ??= 'dsh-local-unsigned'
-process.env.DOWNLOAD_TEST_ORIGIN ??= 'https://download.deepseek.com'
+// 因此必须在 import 官方模块之前提供占位值。已有非空真实值时不会被覆盖。
+// 注意用「非空」判断而不是 `??=`：上游把 .env.macos 里的空值原样注入 process.env，
+// `??=` 对空串无效，占位值补不上，配置求值会以
+// `... requires an HTTPS origin` / `must be set to a non-empty value` 直接失败。
+const placeholder = (name, value) => {
+  const current = process.env[name]
+  if (current === undefined || current.trim() === '') process.env[name] = value
+}
+placeholder('DSH_DESKTOP_APP_ID', 'com.sankuai.dsh')
+placeholder('DSH_DESKTOP_MACOS_SIGNING_IDENTITY', 'DSH-LOCAL-UNSIGNED')
+placeholder('DSH_DESKTOP_MACOS_TEAM_ID', '0000000000')
+placeholder('APPLE_KEYCHAIN_PROFILE', 'dsh-local-unsigned')
+// 上游 0.1.6-alpha.2 起在 electron-builder 配置求值阶段就解析自动更新与强制更新策略
+// （desktop-auto-update-environment.mjs / desktop-policy-environment.mjs），缺值直接抛错。
+// 上游 0.1.6-alpha.2 的 afterPack 只要配置里存在更新源就会写 App 内更新 feed，
+// 而 feed 的 origin 来自这里；本机自用不发布，只求「配置能求值」。
+// 选 production 部署：它的下载 origin 是写死的 HTTPS 常量，不依赖本机 dotenv 里
+// 为空的 DOWNLOAD_TEST_ORIGIN。
+process.env.DSH_DESKTOP_AUTO_UPDATE_ENV = 'production'
+placeholder('DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN', 'https://harness-test.deepseek.com')
+placeholder('DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN', 'https://harness.deepseek.com')
+// 声明未签名构建：官方配置据此跳过签名、公证与自动更新产物（`update === undefined`），
+// 否则 afterPack 会在 publish 已置空的情况下仍去解析更新 feed。
+process.env.DSH_DESKTOP_UNSIGNED = '0'
 
 const { default: official } = await import('../apps/desktop/electron-builder.config.mjs')
 
@@ -39,6 +57,8 @@ config.mac = {
 // artifactBuildCompleted 只对 .dmg 做公证，本机构建也不适用。
 config.afterSign = undefined
 config.artifactBuildCompleted = undefined
-config.publish = null
+// 本机自用不发布：保留官方解析出的更新源（afterPack 用它写 App 内更新 feed，置空会
+// 抛 `publish must contain exactly one provider`），实际不发布由上层的
+// `--publish never` 保证——官方入口也是靠它，而不是靠把 publish 置空。
 
 export default config

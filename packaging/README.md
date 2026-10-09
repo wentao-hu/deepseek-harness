@@ -1,6 +1,6 @@
 # DSH 二次开发：打包与使用指南
 
-> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.6-alpha.1`（2026-09-15 同步；上游运行时自本版起打进 app.asar）
+> 基线：官方 `git@github.com:deepseek-ai/deepseek-harness.git`，master `0.1.6-alpha.2`（2026-09-21 同步；上游运行时自 0.1.6-alpha.1 起打进 app.asar；0.1.6-alpha.2 把桌面端改为共享 Web 运行时的薄 Electron shell）
 > 本文档记录本机二次开发的产物、用法、以及踩过的坑，目的是**以后重打包一条命令搞定、不再重复踩坑**。
 >
 > 仓库分两条线：`master` 是 macOS 开发线（本文档主体），`for_windows` 是它的 Windows 适配线。
@@ -161,13 +161,14 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的空值——提权目标按**白名单**判定（只认 `workspace-write`/`danger-full-access`），枚举外的编造词连同配对的 `justification` 一起丢。起初是占位词黑名单（`null`/`none`/`nil`/`undefined`），09-12 模型改填 `"require"` 即绕过。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 13）：`classifyPiAiError` 把配额判定提到 401/403 之前，并把 403 从 `AUTH` 拆成独立的 `FORBIDDEN`——公司网关把配额耗尽也渲染成 403，先判状态码会把配额问题误报成 key 失效 |
-| `packages/sandbox/sandbox/src/escalation.ts`、`packages/sandbox/sandbox/tests/escalation.spec.ts`、`packages/shell/tool-bash/tests/tools.spec.ts`、`packages/shell/tool-pwsh/tests/tools.spec.ts` | **新增**（坑 14）：`approveEscalation` 在请求模式**等于**当前模式时直接放行，不再抛 `not strictly wider`。同族两个测试文件把「相等即报错」的用例换成真正的更窄场景 |
-| `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：注册表可覆盖 / 未配置签名身份时跳过运行时预签名 / 组装后把补丁传导进运行时 |
-| `apps/desktop/tests/fixtures/runtime-payload-smoke.mjs` | **1 处**：`fs-ext` 缺席时跳过该项校验 |
-| `apps/desktop/electron-builder.config.mjs` | **6 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标）。Windows 指向 `assets/icon.ico`，尺寸档位与 alpha 均可控；`files` 增加 `assets/tray*.png`，让状态栏图标随 asar 一起分发 |
+| ~~`packages/sandbox/sandbox/src/escalation.ts`~~（坑 14，**2026-09-21 退役**）：上游已自行实现同一语义（`approveEscalation` 首行 `if (mode === effectiveMode) return effectiveMode`），fork 的源码改动已随 0.1.6-alpha.2 同步撤下 |
+| `apps/desktop/scripts/prepare-dsh.ts` | **3 处小改**：未配置签名身份时跳过运行时预签名 / 组装后把 pi-ai 补丁传导进运行时 / `carryDesktopPatch()` 把 fork 的 Desktop 覆盖层 patch 拷进运行时树。~~注册表可覆盖（`DSH_DESKTOP_NPM_REGISTRY`）~~（坑 2，**2026-10-09 退役**）：上游 0.2.1-alpha.1 起自带 `resolveNpmRegistry()`，读同一个环境变量，fork 的私有常量已撤下 |
+| ~~`apps/desktop/tests/fixtures/runtime-payload-smoke.mjs`~~（**2026-09-21 退役**）：上游重写该 smoke 时已移除整个 `fs-ext` 校验，fork 的「缺席即跳过」补丁不再需要 |
+| `apps/desktop/electron-builder.config.mjs` | **5 行**：mac/win/linux 各加一个 `icon` 字段（原配置未设图标，打包产物一直用 Electron 默认图标）；`files` 增加 `assets/tray*.png`，让状态栏图标随 asar 一起分发（该项连注释共 2 行） |
+
 | `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 View 菜单**：绑定系统缩放 role（`resetZoom`/`zoomIn`/`zoomOut`）。上游用自定义菜单整体替换了 Electron 默认菜单却未补 View 菜单，导致 `Cmd +/-/0` 完全无响应。菜单文案走 locale 字典 |
-| `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 Edit 菜单**：绑定系统剪贴板 role（`undo`/`redo`/`cut`/`copy`/`paste`/`selectAll`）。与上面 View 菜单同一根因——上游自定义菜单整体替换了默认菜单却未补 Edit 菜单，macOS 上 `Cmd+C/V/X/A/Z` 因此全部无响应。菜单文案走 locale 字典 |
-| `apps/desktop/src/main.ts`、`apps/desktop/src/locale.ts`、`apps/desktop/tests/main-startup.spec.ts` | **新增 File 与 Window 菜单**（坑 15）：File 绑 `close`（`Cmd+W` 关窗）、Window 用系统 `windowMenu`（`Cmd+M` 最小化 / Zoom）。这是同一根因的第三、四次——上游自定义菜单替换默认菜单后，View / Edit / File / Window **四组 role 全部缺失**。`Cmd+W` 可用也是「关窗不退出」体验的前提：关窗后后端仍在跑，点 Dock 重开是秒开 |
+| ~~Edit 菜单~~（**2026-10-09 退役**）：上游 0.2.1-alpha.1 起自己声明 `{ role: 'editMenu' }`，fork 手写的剪贴板 role 与 locale 文案一并撤下 |
+| ~~File 与 Window 菜单~~（坑 15，**2026-10-09 退役**）：上游 0.2.1-alpha.1 起自己声明 `shortcuts.fileMenu(...)` 与 `{ role: 'windowMenu' }`。`Cmd+W` 语义也由上游接管：渲染进程的 `page.close` 命令先关可关闭的侧栏页签，没有可关页签时经 `shortcuts-close-window` IPC 关窗——与 fork 原有的「关窗不退出」体验一致（`window-all-closed` 仍由 fork 的状态栏常驻逻辑兜底），且用户可自定义快捷键 |
 | `apps/desktop/src/main.ts` | **标题栏变白**（坑 16）：`nativeTheme.themeSource = 'light'` 强制应用使用浅色外观，macOS 原生标题栏随之由深灰变为白色。做法借鉴 `~/MyApps/DSChat` |
 | `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **标题栏文字留空**（坑 16）：窗口标题不再跟随页面 `document.title`——harness 把当前对话名写进 `<title>`，标题栏会多出一行与界面内对话标题重复的小字。做法是 `title: ''` + 监听 `page-title-updated` 阻止改写，**布局不变**（不用 `titleBarStyle`，那会改布局） |
 | `apps/desktop/src/main.ts`、`apps/desktop/tests/main-startup.spec.ts` | **状态栏图标常驻**：主进程创建 `Tray` 并保持模块级引用；点击图标调用 `focusPrimaryWindow`，窗口已被 `Cmd+W` 关掉时重建；macOS 用 `trayTemplate.png` 并 `setTemplateImage(true)`，其他平台用 `trayColor.png`。`window-all-closed` 在有图标时不再退出，`will-quit` 销毁图标。窗口 `Cmd+W` 关闭后后端继续跑，点图标秒回 |
@@ -175,16 +176,17 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 | `apps/desktop/scripts/build-icons.mjs`（新增） | `icon.svg` → 10 档 PNG → `icon.icns`（仅 darwin）；同一张离屏页面里追加渲染两个状态栏 SVG，裁切并降采样出 18pt / @2x 两档。非 darwin 跳过 icns（`iconutil` 不存在）并额外产出 `icon.ico`（Windows，见坑 14）。接在 `build:icons` |
 | `packaging/`（新增目录） | `dsh` 启动器、`dsh-tui` 交互式终端启动器、`build-app.sh` 一键打包、`electron-builder.unsigned.config.mjs` 未签名配置 |
 | `packaging/build-app.sh` | **快捷打包路径**（坑 17）：`packages/` 与 `apps/desktop-host/` 自上次打包未变时跳过 `build:official` + `release:pack`，整包 **284 秒 → 58 秒**；判据用文件时间戳（覆盖「改了没提交」与「提交了没重建」），强制全量用 `DSH_FORCE_FULL_BUILD=1`。产物与全量逐字节一致（已实测），**未改任何上游脚本**。`apps/desktop-host` 是 09-12 补进判据的——它是 `RELEASE_PACKAGES` 之一、内容经 tarball 分发，漏比会让它的改动被快捷路径静默丢弃（见坑 17 末条） |
-| `packaging/sync-shared-components.sh`（新增）、`packaging/build-app.sh` | **共用组件分发到 TUI**：两个前端共用同一批注入组件（如 `skill-search.mjs`），但运行副本各自独立——Electron 那份由打包第 1 步组装进 app（直接改 app 内文件会破坏 ad-hoc 签名，所以不在此处理），TUI 那份在 `~/.dsh/.agent-presets/liangshen/`、改仓库源码不会自动更新。本脚本把权威源 `packages/preset/agent-presets/presets/standard/` 下的共用组件同步过去：幂等（内容相同即跳过）、目标目录不存在（换机后 TUI 未装）则跳过并提示。`build-app.sh` 的 [6/6] 步自动调用，也可单独跑。**不进换机恢复清单**——属辅助步骤，缺失不影响二开功能 |
+| `packaging/sync-shared-components.sh`（新增）、`packaging/build-app.sh` | **共用组件分发到 TUI**：两个前端共用同一批注入组件（如 `skill-search.mjs`），但运行副本各自独立——Electron 那份由打包第 1 步组装进 app（直接改 app 内文件会破坏 ad-hoc 签名，所以不在此处理），TUI 那份在 `~/.dsh/.agent-presets/liangshen/`、改仓库源码不会自动更新。本脚本把权威源 `packages/bundle/web-app/presets/`（0.2.1-alpha.1 起 preset 组合搬到 bundle 包内）下的共用组件同步过去：幂等（内容相同即跳过）、目标目录不存在（换机后 TUI 未装）则跳过并提示。`build-app.sh` 的 [6/6] 步自动调用，也可单独跑。**不进换机恢复清单**——属辅助步骤，缺失不影响二开功能 |
 | `packaging/desktop-notification/`、`packaging/install-desktop-notification.sh`（新增） | **桌面完成通知插件**：浏览器半订阅 `turn/end` 事件流，窗口失焦时弹 Electron 原生通知；安装脚本幂等写入 `profiles/desktop`，`build-app.sh` 末尾自动调用。**09-12 起不再是「零上游文件改动」**——插件必须随 app 内置才能自愈，为此改了 `apps/desktop` 两个文件，见下一行 |
 | `apps/desktop/src/project-manager.ts`、`apps/desktop/src/main.ts`、`apps/desktop/tests/project-manager.spec.ts`、`apps/desktop/tests/plugin-pnpm.spec.ts`、`packaging/build-app.sh` | **本地插件自愈**（坑 19）：profile 清单只接受 registry 精确版本（`projectManifest`），通知插件进不了 `dependencies`，于是每次 `pnpm add/remove/update` 都会把它当多余包清掉，`rebuild` 分支更会直接删掉整个 `node_modules`——之后启动校验报 `missing local plugin dsh-desktop-notification`、app 拒绝启动（09-12 实际发生过一次）。修法沿用上游已有的 `linkDesktopHostPackages` 模式：`build-app.sh` 第 3 步把插件副本内置到 `Contents/Resources/local-plugins/`，`prepareProfile` 在校验前调用新增的 `materializeLocalPlugins` 重新物化，`DesktopRuntimeExecutables` 相应增加必填的 `localPlugins` 字段（`plugin-pnpm.spec.ts` 构造该值时同步补上，漏改会让 pre-push 的 typecheck 直接失败）。**副本绝不能放 `Resources/dsh`**——`verifyDesktopRuntime` 对该目录做全量文件清单比对，多一个文件即判资源被篡改。副作用两条：① 改 `packaging/desktop-notification/` 后**必须重新打包**，只重跑安装脚本会被 app 的内置副本覆盖；② app 只物化文件、不动 `bundles` 登记，所以「禁用第三方插件」仍然有效，换机首次启用仍靠安装脚本登记 |
-| `packages/preset/agent-presets/presets/standard/agent.cordis.yml`、`packages/preset/agent-presets/presets/standard/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见）。**09-16 补丁**：`skill_load` 返回值追加技能绝对路径，三种形态都要正确——directory bundle（`<dir>/SKILL.md`）、根部扁平 `<name>.md`、软链接入口。取 `skill.path`（指令文件本身，扁平 skill 时即该 .md 文件）与 `skill.resourceBase.path`（所在目录，扁平 skill 时是整个 root 目录），两者都由 provider 用 `join(root, name)` 拼出、不解析软链接，故再各自 `realpathSync` 一次；输出 `Skill file:` 加 `Skill directory:`，路径被解析过时附 `(discovered via <入口>)`。**副本同步**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、`~/.dsh/.agent-presets/liangshen/` 三处须同内容（后两处分别由补丁脚本与 `build-app.sh` 第 6 步取用），只改其中一处会在重打补丁或切换模式时回退；官网版 `DSH Desktop.app` 内那份是同日早一版（只覆盖目录形态、已人工验证可用），下次重打该补丁时由载荷覆盖为新版。原返回值只有一句加载确认，agent 手里没有任何路径，只能靠猜去找 `reference.md` / `scripts/`（09-12 实际发生过把 `~/.claude/skills` 误当权威副本的事故）。**09-16 补丁（模糊匹配）**：`skill_search` 原按「每个词都命中才算」（`wanted.every`）过滤，且 `tokens()` 用 `[^\p{L}\p{N}_-]+` 切分——`\p{L}` 保住了汉字，却也让中英混排（如「PDF技能」）整段成为一个不可分 token，永远匹配不上目录里独立的 `pdf`，查询里多一两个字即零命中（实测「mac-use computer use 桌面操作 截图」零结果、单词「mac」一条命中）。改法两处：① `tokens()` 在汉字/Latin 边界再切一刀（`flatMap(part => part.match(/[\p{Script=Han}]+|[^\p{Script=Han}]+/gu) ?? [])`）；② `every` 改 `some`。排序仍按「命中名字 ×10」、结果上限 20 条兜底，故放宽召回不等于失控；**已知副作用**（未消除）：泛用短词会带进弱相关结果（自测里查询的 `use` 把 `pdf` 也召回了），靠排序区分，未加词长过滤。**自建版 app 必须重新打包才生效**——它读的是本仓库源码经 `build-app.sh` 组装进 `app.asar` 的副本，改工作区源码不影响已安装的 app，且 `build-app.sh` 第 6 步会把本文件覆盖到 TUI 的 `~/.dsh/.agent-presets/liangshen/`，权威源落后会把 TUI 侧回退成旧版。**四份副本须同内容**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、官网版 app 内、`~/.dsh/.agent-presets/liangshen/`；只改后三份会漏掉自建版 app（它由本仓库构建） |
+| `packages/bundle/web-app/presets/standard.patch.yml`、`packages/bundle/web-app/presets/skill-search.mjs`（新增） | **技能改按需检索**：`tool-skill` 行替换为 `skill-search.mjs`，注册 `skill_search` / `skill_load` 两个按需工具，不再注入约 9KB 的 `<available_skills>` 全量目录（该目录会诱发公司网关追加自己的 `Skill usage rules` 注入块）。`liangshen` preset 已挂同一份；上游若更新此 preset，需保留该替换。**09-12 补丁**：`skill_search` 支持中文查询（原 ASCII-only 分词把中文整段丢弃，`wanted` 为空后退化成返回全量目录）、结果按名称/描述命中数排序（原为无序 `slice`，宽泛查询等于随机 20 条）、每条显示完整描述（原只取描述首行，多行描述的触发条件不可见）。**09-16 补丁**：`skill_load` 返回值追加技能绝对路径，三种形态都要正确——directory bundle（`<dir>/SKILL.md`）、根部扁平 `<name>.md`、软链接入口。取 `skill.path`（指令文件本身，扁平 skill 时即该 .md 文件）与 `skill.resourceBase.path`（所在目录，扁平 skill 时是整个 root 目录），两者都由 provider 用 `join(root, name)` 拼出、不解析软链接，故再各自 `realpathSync` 一次；输出 `Skill file:` 加 `Skill directory:`，路径被解析过时附 `(discovered via <入口>)`。**副本同步**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、`~/.dsh/.agent-presets/liangshen/` 三处须同内容（后两处分别由补丁脚本与 `build-app.sh` 第 6 步取用），只改其中一处会在重打补丁或切换模式时回退；官网版 `DSH Desktop.app` 内那份是同日早一版（只覆盖目录形态、已人工验证可用），下次重打该补丁时由载荷覆盖为新版。原返回值只有一句加载确认，agent 手里没有任何路径，只能靠猜去找 `reference.md` / `scripts/`（09-12 实际发生过把 `~/.claude/skills` 误当权威副本的事故）。**09-16 补丁（模糊匹配）**：`skill_search` 原按「每个词都命中才算」（`wanted.every`）过滤，且 `tokens()` 用 `[^\p{L}\p{N}_-]+` 切分——`\p{L}` 保住了汉字，却也让中英混排（如「PDF技能」）整段成为一个不可分 token，永远匹配不上目录里独立的 `pdf`，查询里多一两个字即零命中（实测「mac-use computer use 桌面操作 截图」零结果、单词「mac」一条命中）。改法两处：① `tokens()` 在汉字/Latin 边界再切一刀（`flatMap(part => part.match(/[\p{Script=Han}]+|[^\p{Script=Han}]+/gu) ?? [])`）；② `every` 改 `some`。排序仍按「命中名字 ×10」、结果上限 20 条兜底，故放宽召回不等于失控；**已知副作用**（未消除）：泛用短词会带进弱相关结果（自测里查询的 `use` 把 `pdf` 也召回了），靠排序区分，未加词长过滤。**自建版 app 必须重新打包才生效**——它读的是本仓库源码经 `build-app.sh` 组装进 `app.asar` 的副本，改工作区源码不影响已安装的 app，且 `build-app.sh` 第 6 步会把本文件覆盖到 TUI 的 `~/.dsh/.agent-presets/liangshen/`，权威源落后会把 TUI 侧回退成旧版。**四份副本须同内容**：本仓库权威源、补丁载荷 `~/.dsh/patches/dsh-desktop-skill-injection/skill-search.mjs`、官网版 app 内、`~/.dsh/.agent-presets/liangshen/`；只改后三份会漏掉自建版 app（它由本仓库构建） |
 | `apps/desktop/src/profile-packages.ts`、`apps/desktop/src/project-manager.ts`、`apps/desktop/tests/project-manager.spec.ts` | **link→runtime 迁移兜底**（坑 20）：上游 0.1.6-alpha.1 起宿主包改由 app.asar 内运行时提供（`profileResolution: 'runtime'`），但旧 profile 里 link 模式遗留的软链指向随新包被替换掉的 `Contents/Resources/dsh`，悬空后会让 `validateDesktopPluginGraph` 报 `invalid installed package` 并**直接挡住启动**（09-15 实际发生）。新增 `unlinkBrokenDesktopHostPackages()`——只清理「有归属记录、当前是软链、且链接目标已不存在」的条目，并在 `applyRelease()` 的 early-exit 判断**之前**调用（二次启动时 state 已被改写，只有这一层能兜住）；state 里的 links 记录保留，供降级/后续清理使用 |
 | `scripts/translation-pairing.manifest.json`、`docs/i18n/README.md`、`docs/i18n/README.zh.md` | **排除登记**：把 `packaging/README.md` 加入翻译配对排除列表（它是本 fork 的本地运维说明，只以中文维护）。manifest 与中英两版 README 需同改，改后重跑 `pnpm run verify-translation-pairing --write docs/i18n/README.md` 记录配对 |
-| `scripts/release/tarball.ts`、`apps/desktop/scripts/prepare-package-set.ts` | **Windows 必需**：新增 `captureTarball()`，只把文件名交给 `tar`、目录走 `cwd`，避免 Windows 盘符被 GNU tar 当成远程主机（坑 21）。对 macOS/Linux 行为等价 |
+| `scripts/release/tarball.ts`、`apps/desktop/scripts/prepare-package-set.ts` | **Windows 必需**（坑 21）：新增 `captureTarball()`，只把文件名交给 `tar`、目录走 `cwd`，避免 Windows 盘符被 GNU tar 当成远程主机（`Cannot connect to D: resolve failed`）。对 macOS/Linux 行为等价。**0.2.1-alpha.1 起上游已在两处内联同样的 cwd 技巧**，但fork 仍保留 `captureTarball()` 封装（两处调用点已统一改走它），避免同一个坑在文件里写两遍 |
 | `apps/desktop/assets/icon.ico`（新增） | Windows 图标：16/24/32/48/64/128/256 共 7 档，PNG 内嵌、保留 alpha |
-| `packaging/build-app.ps1`、`packaging/dsh.cmd`、`packaging/dsh-tui.cmd`（新增） | Windows 一键打包脚本与命令行启动器（对应 mac 侧 `build-app.sh` / `dsh` / `dsh-tui`） |
-| `apps/desktop-host/config/desktop.cordis.patch.yml`（新增 1 段） | **开启会话内容全文搜索**：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层是最后应用的最高优先级 patch 且随 app 打包分发，在此覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。选这里而非 profile 的 `cordis.patch.yml`，是因为 profile 目录被 `~/.dsh` 的 `.gitignore` 排除、换机与重置 Desktop 都会丢 |
+| `packaging/build-app.ps1`、`packaging/dsh.cmd`、`packaging/dsh-tui.cmd`（新增） | Windows 一键打包脚本与命令行启动器（对应 mac 侧 `build-app.sh` / `dsh` / `dsh-tui`）。⚠ `.ps1` 必须存为 **UTF-8 带BOM**：PS 5.1 按 GBK 解码无 BOM 的 UTF-8，中文会把语法拆坏，表现为「脚本无输出、无报错、也什么都没做」。`.cmd` 反而不能加BOM |
+| `apps/desktop-host/config/desktop.cordis.patch.yml`（仅保留 1 段）+ `apps/desktop-host/src/index.ts` | **开启会话内容全文搜索**（2026-09-21 改接法）：上游 base 与 web-app 两层都把 `session-query-sqlite` 配成 `openAt: never`，侧边栏搜索只匹配会话标题与工作区名、正文搜不到。本层覆盖为 `openAt: first-search` + `path: !!js dshHomePath('cache', 'session-query.sqlite')`（patch 整段替换 `config`，`path` 必须一并写全，否则该行起不来）。**0.1.6-alpha.2 起上游把 desktop-host 改成共享 Web 运行时的薄壳并删掉了自动加载该文件的逻辑**，因此改为：`index.ts` 里 `const DESKTOP_PATCH = fileURLToPath(new URL('../config/desktop.cordis.patch.yml', import.meta.url))`，并把它放进 `runProfile({ patchFiles: [DESKTOP_PATCH] })` —— patch overlay 排在 profile 自身与 home 级 patch 之后，优先级与改造前一致。文件要随运行时分发：`apps/desktop-host/package.json` 的 `files` 与 `apps/desktop/src/core-package-set.ts` 的 `DESKTOP_HOST_RUNTIME_FILES` 都已登记；`prepare-dsh.ts` 的 `carryDesktopPatch()` 在生成哈希清单前把它拷进 `.desktop-build` 的运行时树。**不要**改走 profile 的 `cordis.patch.yml`：该目录被 `~/.dsh` 的 `.gitignore` 排除、换机与「禁用第三方插件并重启」都会被清掉 |
+
 | `packages/client/ui-theme/src/styles/claude-desktop.css`（新增）、`packages/client/ui-theme/src/client/styles.ts` | **Claude Desktop 主题（仅浅色）**：新增 fork 专属样式表，并在 `styles.ts` 的 `STYLES` 数组**末尾**挂载——挂载顺序决定层叠，同特异性的声明以本表为准；不改任何上游样式表内容。落地的五项：① 代码字号 11px（代码块）/ 12px（行内）→ **14px / 行高 20px**（09-15 由 15px 下调，对齐 DSH Desktop 侧），改的是 `--dsw-font-markdown-code-block`，它同时被 CodeBlock、TerminalBlock、DiffBlock、ReadBlock 消费，一处覆盖即全局生效；② 代码字体族统一为 Claude 的 `"SF Mono", ui-monospace, Menlo` 栈；③ 标题层级收敛为 22 / 18 / 16px + 600 字重（原 21 / 19 / 18px + 700），仍走 `--dsh-content-font-delta` 跟随字号设置；④ 代码块改白色卡片（8px 圆角 + 1px 浅描边，用 `CodeBlock.tsx` 挂出的稳定全局类 `md-code-block` 命中）；⑤ 语法高亮换 claude.ai 截图像素实测五色（`--shiki-token-*`）。**刻意不动**：正文字号 `--dsh-content-font-size`、正文字体族 `--dsw-font-family`（用户要求「只调整代码字体」）。深色模式（`body[data-ds-dark-theme]`）保持 DSH 原样。参数取自 Claude Desktop 1.52386.6 应用包内的 CDS 令牌（`--cds-*`，`data-density=comfortable`）与 claude.ai 渲染截图实测 |
 | `packages/client/ui-theme/src/theme-settings.ts`、`src/client/index.ts`、`src/client/settings-store.ts`、`src/client/AppearanceRow.tsx`、`src/client/locales.ts` | **主题皮肤开关**（09-15）：`ui-theme` 的持久化设置新增 `skin` 字段（`'default' \| 'claude'`，缺该字段的旧设置文档解析为 `default`）；外观设置行多一组「主题皮肤」按钮；`styles.ts` 的皮肤表随它挂载/卸载，切回「默认」即恢复 DSH 原生外观。**主题 CSS 与 DSH Desktop 侧是同一份文件、逐字一致（sha256 相同），同步方式＝`cp` 覆盖**。连带改动：`installThemeStyles` 多收一个 `readSkin` 参数，调用点从 `apply()` 开头移到 `ThemeRuntime` 创建之后——皮肤表要在挂载时读到已持久化的 skin |
 | 仓库外配置 | `~/.dsh/settings.yaml`（公司 provider + 默认模型）、`~/.dsh/.env`（`SANKUAI_API_KEY`、`RESPONSES_NATIVE_TOOLS=web_search`） |
@@ -202,6 +204,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **现象**：`GET https://registry.npmjs.org/negotiator: The operation was aborted due to timeout`
 - **根因**：`prepare-dsh.ts` 把 registry **硬编码**为 `registry.npmjs.org`，还会过滤掉继承的 `npm_*`/`pnpm_*` 环境变量，因此无法从外部改源。而该源在本网络下 15 秒超时（同一时刻 npmmirror 仅 0.18 秒），这一步**永远不会成功**。
 - **修复**：`prepare-dsh.ts` 增加 `DSH_DESKTOP_NPM_REGISTRY` 覆盖，**默认值仍是上游官方源**，不设置时行为与上游一致。`build-app.sh` 默认用国内镜像。
+- **2026-10-09 退役**：上游 0.2.1-alpha.1 起自带 `resolveNpmRegistry(process.env)`（读的就是 `DSH_DESKTOP_NPM_REGISTRY`，未设置时回官方源），fork 的私有常量与两处引用已撤下；`build-app.sh` 仍默认导出国内镜像，行为不变。
 
 ### 坑 3：macOS 打包无条件要求 Apple 证书
 
@@ -314,6 +317,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **根因**：与 View、Edit 菜单**是同一个根因的延续**——上游用自定义菜单整体替换了 Electron 默认菜单，替换后 View / Edit / File / Window 四组 role 全部缺失。`Cmd+W` 的标准绑定是 File 菜单的 `close` role、`Cmd+M` 是 Window 菜单的 `minimize`，两者都不存在，按键自然无声无息。
 - **修复**：加 File 菜单（`close` role）与 Window 菜单（系统 `windowMenu`，自带 Minimize / Zoom）。
 - **为什么值得修**：`Cmd+W` 可用是「关窗不退出」体验的前提——macOS 上关窗后 app 进程不退出（`apps/desktop/src/main.ts` 的 `window-all-closed` 只在非 darwin 才调 `app.quit()`），后端保持就绪，此时点 Dock 重开是**秒开**（实测验证过），完全跳过下面那 4 秒启动；只有 `Cmd+Q` 才需要重新付这个成本。
+- **2026-10-09 退役**：上游 0.2.1-alpha.1 起自己声明 `shortcuts.fileMenu(...)`（`page.close`，可在设置里改键）与 `{ role: 'windowMenu' }`，功能面已由上游覆盖，fork 手写的 File / Edit / Window 三组菜单撤下；**只保留 View（缩放）菜单**——上游至今没有 View 组，`Cmd +/-/0` 仍会无响应。`Cmd+W` 现在的路径是：渲染进程 `page.close` 先关可关闭的侧栏页签，没有可关页签时经 `shortcuts-close-window` IPC 关窗（`packages/client/ui-sidebar-right/src/client/shortcuts.ts`），关窗后 app 常驻的行为由 fork 的状态栏图标兜底（`window-all-closed` 只在没有图标时才退出）。
 
 ### 坑 16：界面是浅色、标题栏却跟着深色系统走
 
@@ -475,6 +479,56 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 - **排查姿势**：脚本静默无输出时，先用
   `[System.Management.Automation.Language.Parser]::ParseFile($p,[ref]$t,[ref]$e)` 看 `$e.Count`，
   比反复试跑快得多。
+
+### 坑 21：上游 `prepare:desktop` 无条件要求 Apple 证书（09-21 起）
+
+- **现象**：`pnpm run prepare:desktop`（= `apps/desktop` 的 `prepare:package` → `package-target.ts --prepare-only`）
+  在**编译开始前**就退出：`desktop package: cannot read .../apps/desktop/.env.macos`，
+  或补上 `.env.macos` 后继续报 `DSH_DESKTOP_MACOS_SIGNING_IDENTITY must be set to a non-empty value` /
+  `DSH_DESKTOP_MACOS_TEAM_ID must be set to a non-empty value` / `CSC_LINK must identify a readable local file`。
+- **根因**：上游 0.1.6-alpha.2 起 `validateDesktopPackageEnvironment()` 在 `--prepare-only` 分支也会
+  走 `resolveMacOSSigningEnvironment()` + 公证策略校验；只有 `--unsigned` 才会提前返回，而
+  `--unsigned` 被限制为只能用于 `win-x64`。本机自用没有 Developer ID 证书，官方入口无法产出 `.app`。
+- **解法**：`packaging/build-app.sh` 的全量分支**不再调用** `pnpm run prepare:desktop`，而是按
+  `package-target.ts` 的同一顺序逐个调用 prepare 脚本（`build:official` → `release:pack --family dsh`
+  → `apps/desktop-host` 的 `pack` → `release:pack --family vendor` → landlock 的 `build:ts` + `pack`
+  → `prepare:runtime` → `prepare:packages` → `prepare:dsh`），并补一个被上游 gitignore 的
+  `apps/desktop/.env.macos`（应用 ID、更新/策略 origin 的 HTTPS 占位值即可，签名与公证字段留空）。
+  签名仍由该脚本第 4 步的 ad-hoc 签名完成。
+
+### 坑 22：`tsdown` 报 `[@deepseek-ai/dsh-root] Cannot find entry`（孤立包目录导致）
+
+- **现象**：全量打包在 `build:official` 的 `tsdown --env.DSH_BUILD_FACE host` 阶段失败，
+  报 `Cannot find entry: ["lib/types/{index,invariant,startup}.js"]`，前缀却是仓库根包名
+  `@deepseek-ai/dsh-root`，而根目录并没有 `src/`。
+- **根因**：仓库里残留了**上游已经移走的包目录**（本次是 `packages/fs/tool-present`，
+  上游已改到 `packages/deliverables/tool-present`）。它只剩 `node_modules/` 与旧的
+  `lib/types/`，没有 `package.json`；`tsdown` 在 `packages/*/*` 的 workspace 匹配里仍把它当成员，
+  `readPackageJson` 向上走到仓库根读到 `@deepseek-ai/dsh-root`，于是按根的名字报错。
+  同一类还有「上游删包后遗留的旧 `lib/`」，会让 `transform-corpus` 的
+  「every built bundle imports」误报 `UNEXPECTED BASELINE FAILURE`。
+- **解法**：把这类目录整体移出仓库（本次移到 `/tmp/dsh-stale-20260921/`），再重建。
+  下次同步后如果 `tsdown` 又报根包名找不到入口，**先查 `packages/*/*` 下有没有 `git ls-files` 为空、
+  且没有 `package.json` 的残留目录**：
+  `for d in packages/*/*; do [ -d "$d" ] && [ "$(git ls-files "$d" | wc -l)" -eq 0 ] && echo "$d"; done`。
+- **附带**：`apps/desktop/.desktop-build` 被清空后，各包 `lib/` 也可能已被删而 `*.tsbuildinfo` 还在，
+  此时 `tsc -b` 会认为「已是最新」而不重新 emit；需要先删掉这些 tsbuildinfo 再构建
+  （`find . -name '*.tsbuildinfo' -not -path './node_modules/*' -delete`）。
+
+### 坑 23：preset 行里的相对 `./x.mjs` 不再按 patch 文件解析（0.2.1-alpha.1 起）
+
+- **背景**：上游把 `packages/preset/agent-presets` 整包删掉，preset 组合改写成
+  `packages/bundle/web-app/presets/{standard,ptc,minimal,cordis}.patch.yml`，
+  每一层 patch 都只是「往 profile 根插一个 `@deepseek-ai/dsh-agent-preset` 声明行」。
+- **坑**：旧写法 `name: ./skill-search.mjs`（相对 preset 文件所在目录）**失效**。bundle 的
+  patch 层会被拍平成一个 profile 组合再挂载，行里的相对说明符按 **profile 根**（`~/.dsh/profiles/desktop/`）
+  解析，而不是 patch 文件所在目录——插件会以「找不到模块」失败，preset 挂载整体报错。
+- **解法**：把插件文件放进 bundle 包并登记导出，行里用**包名子路径**引用：
+  `name: '@deepseek-ai/dsh-web-app/presets/skill-search.mjs'`，同时在
+  `packages/bundle/web-app/package.json` 里补 `exports`（`./presets/skill-search.mjs`）
+  与 `files`（`presets/skill-search.mjs`）——后者决定它会不会进 tarball，漏掉只在运行时才炸。
+- **判据**：想知道某个 preset 行会不会解析成功，看 `name` 是不是「包名 / `cordis:` 内置 / 绝对 `file:` URL」三者之一即可；
+  凡是以 `.` 开头的相对说明符，都要先确认基准目录。
 
 ## 五、换机恢复清单
 
