@@ -881,7 +881,7 @@ describe('desktop main startup', () => {
       && item.submenu.some(entry => entry.role === 'copy')
     const template = harness.menu.buildFromTemplate.mock.calls
       .map(call => call[0])
-      .find(items => items.some(item => isEditMenu(item) || item.role === 'editMenu' || item.label === en.editMenu))
+      .find(items => items.some(item => isEditMenu(item) || item.role === 'editMenu'))
     if (template === undefined) throw new Error('application menu missing')
     expect(template.map(describeItem)).toEqual(platform === 'darwin'
       ? ['Desktop test', en.fileMenu, 'editMenu', en.viewMenu, 'windowMenu']

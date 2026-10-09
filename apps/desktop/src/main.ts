@@ -14,7 +14,6 @@ import {
   Menu,
   nativeImage,
   powerMonitor,
-  nativeImage,
   nativeTheme,
   net,
   protocol,

@@ -119,6 +119,8 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
       const paths = resolveDesktopPaths(home)
       const manager = new DesktopProjectManager(paths, {
         dsh: project,
+        // 二次开发：本地插件自愈要求这个字段；该套件不启用本地插件，指向一个不存在的目录即可。
+        localPlugins: join(root, 'local-plugins'),
       })
       await manager.applyRelease()
       writeFileSync(join(paths.profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n- id: deepseek-account\n  config:\n${process.platform === 'linux' ? '    desktopPlatform: darwin\n' : ''}    platformOrigin: ${platform.origin}\n    allowLoopbackHttp: true\n    requestHeaders:\n      Cookie: test_gate=synthetic\n`)
