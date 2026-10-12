@@ -1,8 +1,8 @@
 /** Materialize the complete production runtime before publishing Desktop resources. */
 
 import { packagingStep } from './packaging-step.mjs'
-import { spawn, execFileSync } from 'node:child_process'
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { desktopNodeEnvironment } from '../src/node-environment.ts'
@@ -111,47 +111,6 @@ function runPnpm(args: readonly string[]): Promise<void> {
 }
 
 /**
- * 二次开发：需要传导到内置运行时的仓库补丁。
- *
- * 桌面运行时的 node_modules 是 pnpm 在临时目录里做的一次独立 prod 安装，仓库
- * pnpm-workspace.yaml 的 patchedDependencies 只作用于仓库自身，不会传导过去。
- * 名单只列真正属于运行时产物的包：node-pty 等补丁按上游做法不进运行时。
- */
-const RUNTIME_PATCH_PACKAGES = new Set(['@earendil-works/pi-ai'])
-
-/**
- * Apply the repository patches that must reach the bundled desktop runtime.
- *
- * 不在此处补上，打包出的桌面端就缺少本地补丁带来的能力——当前是 openai-responses
- * 路由透传服务端原生 web_search 工具。补丁必须在 writeDesktopRuntime 计算文件哈希
- * 之前应用，否则资源清单与实际内容不一致，启动时的运行时完整性校验会判定资源被篡改。
- * 版本不匹配时明确跳过并打印，避免把补丁打到错误的实现上。
- * @param runtimeRoot - the assembled runtime root about to be described and verified.
- */
-function applyRuntimePatches(runtimeRoot: string): void {
-  const patchDir = join(resolve(APP_ROOT, '..', '..'), 'patches')
-  if (!existsSync(patchDir)) return
-  for (const name of readdirSync(patchDir).filter(entry => entry.endsWith('.patch')).sort()) {
-    const stem = name.slice(0, -'.patch'.length)
-    const separator = stem.lastIndexOf('@')
-    if (separator <= 0) continue
-    const packageName = stem.slice(0, separator).replace('__', '/')
-    if (!RUNTIME_PATCH_PACKAGES.has(packageName)) continue
-    const version = stem.slice(separator + 1)
-    const packageDir = join(runtimeRoot, 'node_modules', packageName)
-    const manifestPath = join(packageDir, 'package.json')
-    if (!existsSync(manifestPath)) continue
-    const installed = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version?: unknown }
-    if (installed.version !== version) {
-      process.stdout.write(`desktop runtime: ${packageName} is ${String(installed.version)}, not ${version}; skipped ${name}\n`)
-      continue
-    }
-    execFileSync('patch', ['-p1', '-i', join(patchDir, name)], { cwd: packageDir, stdio: 'pipe' })
-    process.stdout.write(`desktop runtime: applied ${name}\n`)
-  }
-}
-
-/**
  * Carry the fork's Desktop overlay patch into the runtime tree.
  *
  * 二次开发：上游 0.1.6-alpha.2 起把 desktop-host 的 profile 组装交给共享 Web 运行时，
@@ -218,7 +177,10 @@ async function main(): Promise<void> {
       throw new Error(`desktop runtime: missing required LibreOffice engine ${officeEngine}`)
     }
     // 必须在 writeDesktopRuntime 生成哈希清单之前执行。
-    applyRuntimePatches(DSH_OUTPUT_ROOT)
+    // 仓库补丁（pi-ai 等）不再由本 fork 手动传导：上游 0.2.1-alpha.2 起
+    // `prepareRuntimePatches()` + `runtime-patch-policy.ts` 已把 `patchedDependencies`
+    // 里的 shared 补丁 staged 进运行时构建根，由 runtime 的 pnpm 安装自行应用；
+    // 旧的手动 `patch -p1` 会二次应用同一补丁而被判为反向、反而把补丁卸掉。
     carryDesktopPatch(DSH_OUTPUT_ROOT)
     // 二次开发：仅在配置了签名身份时才预签名运行时。
     // 上游在 macOS 上无条件签名并要求 Apple 证书；本机自用（不签名、不公证、不分发）
