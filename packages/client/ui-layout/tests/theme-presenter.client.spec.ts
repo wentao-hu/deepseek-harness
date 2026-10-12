@@ -17,7 +17,7 @@ function snapshot(
 ): ThemeSnapshot {
   // The presenter must key off colorScheme, not the id — keep them distinct.
   const active = { id: `${colorScheme}-test`, colorScheme, tokens }
-  return { preference, fontSize, skin: 'default', fontSizes: { text: fontSize, code: 11, terminal: 13 }, fontFamilies, active, themes: [active], revision: 1 }
+  return { preference, skin: 'default', fontSizes: { text: fontSize, code: 11, terminal: 13 }, fontFamilies, active, themes: [active], revision: 1 }
 }
 
 function clearThemePresentation(): void {
