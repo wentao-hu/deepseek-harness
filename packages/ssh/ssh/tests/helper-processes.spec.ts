@@ -198,7 +198,10 @@ describe.skipIf(process.platform === 'win32')('SSH helper process settlement', (
     } finally { await test.close() }
   })
 
-  it('rolls back a listener path that exceeds the operating system socket limit', async () => {
+  // macOS accepts Unix socket paths well beyond `sun_path`'s nominal 104 bytes (the kernel reads the
+  // caller-supplied sockaddr length), so the over-limit precondition this test asserts is only
+  // reachable on Linux, where the limit is enforced with ENAMETOOLONG.
+  it.skipIf(process.platform === 'darwin')('rolls back a listener path that exceeds the operating system socket limit', async () => {
     const root = await mkdtemp('/tmp/dsh-ssh-long-')
     const longRoot = `${root}/${'x'.repeat(140)}`
     await mkdir(longRoot)
