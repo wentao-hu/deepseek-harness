@@ -20,6 +20,7 @@ import {
 import { smokePrimaryRuntime } from './prepare-primary-runtime.ts'
 import { smokePreparedRuntime } from './smoke-prepared-runtime.ts'
 import { prepareRuntimeManifests } from './prepare-runtime-manifests.ts'
+import { prepareRuntimePatches, verifyRuntimePatches } from './prepare-runtime-patches.ts'
 import { writeDesktopRuntime, verifyDesktopRuntime } from '../src/runtime-tree.ts'
 import {
   resolveDesktopAppId,
@@ -42,7 +43,7 @@ const RUNTIME_ROOT = BUILD_PATHS.runtime
 const PNPM_BUILD_STATE = BUILD_PATHS.dshPnpm
 const PACKAGE_SET_ROOT = BUILD_PATHS.packageSet
 const NODE = join(BUILD_PATHS.electron, process.platform === 'win32' ? 'electron.exe' : 'Electron.app/Contents/MacOS/Electron')
-const PNPM = join(RUNTIME_ROOT, 'pnpm', 'bin', 'pnpm.mjs')
+const PNPM = join(RUNTIME_ROOT, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs')
 
 function manifestVersion(path: string, subject: string): string {
   const manifest = JSON.parse(readFileSync(path, 'utf8')) as { version?: unknown }
@@ -178,12 +179,14 @@ async function main(): Promise<void> {
       mkdirSync(STORE_ROOT, { recursive: true })
     })
     const release = desktopRelease()
-    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:stage-packages', async () => {
+    const patches = await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:stage-packages', async () => {
       copyFileSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGE_SET_FILE), join(BUILD_ROOT, DESKTOP_PACKAGE_SET_FILE))
       cpSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGES_DIR), join(BUILD_ROOT, DESKTOP_PACKAGES_DIR), { recursive: true })
       createRuntimeProjectMetadata(BUILD_ROOT, release)
+      return prepareRuntimePatches(BUILD_ROOT, resolve(APP_ROOT, '..', '..'))
     })
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:lockfile', () => runPnpm(['install', '--lockfile-only']))
+    verifyRuntimePatches(BUILD_ROOT, patches)
     verifyDesktopCoreLockfile(
       readFileSync(join(BUILD_ROOT, 'pnpm-lock.yaml'), 'utf8'),
       readDesktopCorePackageSet(BUILD_ROOT, release.version),
@@ -221,9 +224,11 @@ async function main(): Promise<void> {
     // 上游在 macOS 上无条件签名并要求 Apple 证书；本机自用（不签名、不公证、不分发）
     // 时该步骤无法完成也并非必需——本地构建的文件不带 quarantine 属性，可直接双击运行，
     // 且 electron-builder 配置的 signIgnore 本就跳过 /Contents/Resources/dsh。
-    // 设置了 DSH_DESKTOP_MACOS_SIGNING_IDENTITY 时行为与上游完全一致。
+    // 设置了 DSH_DESKTOP_MACOS_SIGNING_IDENTITY 时行为与上游完全一致；
+    // 上游的 DSH_DESKTOP_UNSIGNED=1 逃生开关同样生效。
     const configuredSigningIdentity = process.env.DSH_DESKTOP_MACOS_SIGNING_IDENTITY?.trim()
-    if (process.platform === 'darwin' && configuredSigningIdentity !== undefined && configuredSigningIdentity !== '') {
+    if (process.platform === 'darwin' && process.env.DSH_DESKTOP_UNSIGNED !== '1'
+      && configuredSigningIdentity !== undefined && configuredSigningIdentity !== '') {
       await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:dsh-native', () => signMacOSRuntime(DSH_OUTPUT_ROOT, resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), target.arch, join(BUILD_PATHS.root, 'signature-cache')))
       await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:primary-native', () => signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), target.arch, join(BUILD_PATHS.root, 'signature-cache')))
     }
