@@ -24,7 +24,10 @@
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./presets/*.patch.yml": "./presets/*.patch.yml",
-    "./presets/skill-search.mjs": "./presets/skill-search.mjs",
+    "./presets/skill-search.mjs": {
+      "types": "./lib/types/skill-search.d.ts",
+      "default": "./presets/skill-search.mjs"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json",
     "./startup/locale/*.json": "./locale/startup/*.json",

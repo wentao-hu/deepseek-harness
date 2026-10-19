@@ -299,7 +299,7 @@ export class ThemeRuntime {
     if (!isThemeSkin(skin)) throw new Error(`skin "${skin}" is not declared`)
     if (this.skin === skin) return
     this.skin = skin
-    this.write(SKIN_FIELD, skin)
+    this.write(() => this.host.set(SKIN_FIELD, skin))
     this.publish()
   }
 
