@@ -11,6 +11,7 @@ import claudeDesktop from '../styles/claude-desktop.css?inline'
 import type { ThemeSkin } from '../theme-settings.ts'
 
 const PLUGIN_ID = '@deepseek-ai/dsh-client-ui-theme'
+const HAIRLINE_WIDTH = '--dsh-hairline-width'
 
 /** Sheets mounted for every skin, in cascade order (later sheets win at equal specificity). */
 const BASE_STYLES = [
@@ -33,11 +34,35 @@ const SKIN_STYLES: Partial<Record<ThemeSkin, string>> = {
  * Mount the global theme sheets for exactly the owning plugin lifetime. Base
  * sheets mount unconditionally; the fork's skin sheet mounts and unmounts with
  * the persisted skin so the Appearance row can switch back to the stock look.
+ * Window-backed documents also publish the DPR-aware stroke width.
  * @param ctx - Owning plugin context.
  * @param readSkin - Reads the currently persisted conversation skin.
  */
 export function installThemeStyles(ctx: Context, readSkin: () => ThemeSkin): void {
   if (typeof document === 'undefined') return
+  const view = document.defaultView
+  if (view !== null) ctx.effect(() => {
+    const root = document.documentElement
+    const previousWidth = root.style.getPropertyValue(HAIRLINE_WIDTH)
+    const previousPriority = root.style.getPropertyPriority(HAIRLINE_WIDTH)
+    const matchMedia = typeof view.matchMedia === 'function' ? view.matchMedia.bind(view) : undefined
+    let resolution: MediaQueryList | undefined
+    const updateStroke = (): void => {
+      // Positive borders round down to whole device pixels, with a one-pixel minimum.
+      const dpr = view.devicePixelRatio
+      const width = Math.max(1, Math.floor(0.5 * dpr)) / dpr
+      root.style.setProperty(HAIRLINE_WIDTH, `${width}px`)
+      resolution?.removeEventListener('change', updateStroke)
+      resolution = matchMedia?.(`(resolution: ${dpr}dppx)`)
+      resolution?.addEventListener('change', updateStroke)
+    }
+    updateStroke()
+    return () => {
+      resolution?.removeEventListener('change', updateStroke)
+      if (previousWidth === '') root.style.removeProperty(HAIRLINE_WIDTH)
+      else root.style.setProperty(HAIRLINE_WIDTH, previousWidth, previousPriority)
+    }
+  }, 'ui-theme: DPR-aware hairline width')
   for (const [name, css] of BASE_STYLES) {
     ctx.effect(() => {
       const tag = document.createElement('style')

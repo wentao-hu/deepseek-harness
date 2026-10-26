@@ -1,0 +1,139 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index befb18b2e7d5..7b7da85be215 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -588,7 +588,6 @@ export const stream = (model, context, options) => {
+                         const block = blocks[index];
+                         if (block && block.type === "toolCall") {
+                             block.partialJson += event.delta.partial_json;
+-                            block.arguments = parseStreamingJson(block.partialJson);
+                             stream.push({
+                                 type: "toolcall_delta",
+                                 contentIndex: index,
+diff --git a/dist/api/bedrock-converse-stream.js b/dist/api/bedrock-converse-stream.js
+index 6ec62d045eab..abe5eeee081f 100644
+--- a/dist/api/bedrock-converse-stream.js
++++ b/dist/api/bedrock-converse-stream.js
+@@ -461,7 +461,6 @@ function handleContentBlockDelta(event, blocks, output, stream) {
+     }
+     else if (delta?.toolUse && block?.type === "toolCall") {
+         block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
+-        block.arguments = parseStreamingJson(block.partialJson);
+         stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
+     }
+     else if (delta?.reasoningContent) {
+diff --git a/dist/api/mistral-conversations.js b/dist/api/mistral-conversations.js
+index 9038a1c498e0..afda5ea6c3be 100644
+--- a/dist/api/mistral-conversations.js
++++ b/dist/api/mistral-conversations.js
+@@ -570,7 +570,6 @@ async function consumeChatStream(model, output, stream, mistralStream, onProvide
+                 ? toolCall.function.arguments
+                 : JSON.stringify(toolCall.function.arguments || {});
+             block.partialArgs = (block.partialArgs || "") + argsDelta;
+-            block.arguments = parseStreamingJson(block.partialArgs);
+             stream.push({
+                 type: "toolcall_delta",
+                 contentIndex: toolBlocksByKey.get(key),
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index 0eeaffa96862..2e13492cacc0 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -449,11 +449,15 @@ export const stream = (model, context, options) => {
+                             if (!block.name && name) {
+                                 block.name = name;
+                             }
++                            // Gemini OpenAI-compatible endpoints require this signature on replay.
++                            const geminiThoughtSignature = toolCall.extra_content?.google?.thought_signature;
++                            if (typeof geminiThoughtSignature === "string" && geminiThoughtSignature.length > 0) {
++                                block.thoughtSignature = geminiThoughtSignature;
++                            }
+                             let delta = "";
+                             if (toolCall.function?.arguments) {
+                                 delta = toolCall.function.arguments;
+                                 block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+-                                block.arguments = parseStreamingJson(block.partialArgs);
+                             }
+                             else if (toolCall.custom?.input) {
+                                 const nextInput = getCustomToolCallInput(block) + toolCall.custom.input;
+@@ -1033,6 +1037,9 @@ export function convertMessages(model, context, compat, options) {
+                             },
+                         };
+                     }
++                    const geminiThoughtSignature = tc.thoughtSignature && !parseLegacyEncryptedReasoningDetail(tc.thoughtSignature)
++                        ? tc.thoughtSignature
++                        : undefined;
+                     return {
+                         id: tc.id,
+                         type: "function",
+@@ -1040,6 +1047,7 @@ export function convertMessages(model, context, compat, options) {
+                             name: tc.name,
+                             arguments: JSON.stringify(tc.arguments),
+                         },
++                        ...(geminiThoughtSignature && { extra_content: { google: { thought_signature: geminiThoughtSignature } } }),
+                     };
+                 });
+             }
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+index af5f04228533..b9f00fbe3a2b 100644
+--- a/dist/api/openai-responses-shared.js
++++ b/dist/api/openai-responses-shared.js
+@@ -561,7 +561,6 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             if (!slot || slot.block.partialJson === undefined)
+                 continue;
+             slot.block.partialJson += event.delta;
+-            slot.block.arguments = parseStreamingJson(slot.block.partialJson);
+             pushToolCallDelta(slot, event.delta);
+         }
+         else if (event.type === "response.function_call_arguments.done") {
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 2ab985c7da1e..fbdd969fd5ef 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -270,11 +270,29 @@ function buildParams(model, context, options, compat, grammarToolInputProperties
+     if (options?.serviceTier !== undefined) {
+         params.service_tier = options.serviceTier;
+     }
+-    if (transcriptTools.requestTools.length > 0) {
+-        params.tools = convertResponsesTools(transcriptTools.requestTools, {
+-            supportsStrictMode: compat.supportsStrictMode,
+-            supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
+-        });
++    // 二次开发：通过环境变量 RESPONSES_NATIVE_TOOLS 附加服务端原生工具
++    // （例如 web_search：由模型服务端执行搜索，而不是由 harness 调用本地工具）。
++    // 未设置该变量时行为与上游完全一致。
++    const nativeToolTypes = typeof process === "undefined" ? undefined : process.env?.RESPONSES_NATIVE_TOOLS;
++    const nativeTools = typeof nativeToolTypes === "string" && nativeToolTypes.trim().length > 0
++        ? nativeToolTypes.split(",").map((type) => type.trim()).filter((type) => type.length > 0).map((type) => ({ type }))
++        : [];
++    // 二次开发：剔除与服务端原生工具同名的 function 工具。
++    // 公司网关要求工具名唯一，而 harness 自带名为 web_search 的 function 工具，
++    // 与透传的 {"type":"web_search"} 撞名会返回
++    // invalid_prompt: Tool names must be unique。同名时以服务端工具为准。
++    const nativeNames = new Set(nativeTools.map((tool) => tool.type));
++    const requestTools = nativeNames.size === 0
++        ? transcriptTools.requestTools
++        : transcriptTools.requestTools.filter((tool) => !nativeNames.has(tool.name));
++    if (requestTools.length > 0 || nativeTools.length > 0) {
++        params.tools = [
++            ...convertResponsesTools(requestTools, {
++                supportsStrictMode: compat.supportsStrictMode,
++                supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
++            }),
++            ...nativeTools,
++        ];
+     }
+     if (options?.toolChoice !== undefined) {
+         params.tool_choice = options.toolChoice;
+diff --git a/dist/api/pi-messages.js b/dist/api/pi-messages.js
+index 7da1c45de8a1..296d131b59b1 100644
+--- a/dist/api/pi-messages.js
++++ b/dist/api/pi-messages.js
+@@ -155,8 +155,6 @@ function createEventConverter(model) {
+             case "toolcall_delta": {
+                 const json = `${toolJson.get(event.contentIndex) ?? ""}${event.delta}`;
+                 toolJson.set(event.contentIndex, json);
+-                partial.content[event.contentIndex].arguments =
+-                    parseStreamingJson(json);
+                 break;
+             }
+             case "toolcall_end":

@@ -98,7 +98,7 @@ pnpm --filter @deepseek-ai/dsh-desktop build:icons
 
 | 文件 | 改动性质 |
 |---|---|
-| `patches/@earendil-works__pi-ai@0.85.1.patch` | **新增**：openai-responses 路由透传服务端原生工具，并剔除同名 function 工具 |
+| `patches/@earendil-works__pi-ai@1.3.0.patch` | **新增**：openai-responses 路由透传服务端原生工具，并剔除同名 function 工具（上游改为自带同版本补丁后，fork 片段已并入同一文件） |
 | `pnpm-workspace.yaml` | **1 行**：声明上面的补丁（`patchedDependencies`） |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 10）：`toolcall_end` 处剔除模型给提权字段填的空值——提权目标按**白名单**判定（只认 `workspace-write`/`danger-full-access`），枚举外的编造词连同配对的 `justification` 一起丢。起初是占位词黑名单（`null`/`none`/`nil`/`undefined`），09-12 模型改填 `"require"` 即绕过。该包在本仓库是 **workspace 源码包**，`patchedDependencies` 对它不生效，必须直接改源码 |
 | `packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm-pi-ai/tests/convert.spec.ts` | **新增**（坑 13）：`classifyPiAiError` 把配额判定提到 401/403 之前，并把 403 从 `AUTH` 拆成独立的 `FORBIDDEN`——公司网关把配额耗尽也渲染成 403，先判状态码会把配额问题误报成 key 失效 |
